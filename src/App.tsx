@@ -1541,70 +1541,29 @@ const App = () => {
       return sum + pallets;
     }, 0);
 
-    const allObservations = orderItemsData
+    const consolidatedObservationsText = orderItemsData
       .map((item) => item.estado)
-      .filter(
-        (obs) => obs && obs.trim() !== "" && obs.toUpperCase() !== "CANCELADO"
-      );
+      .filter((obs) => obs && obs.trim() !== "" && obs.toUpperCase() !== "CANCELADO")
+      .join(" – ");
 
-    const consolidatedObservationsText =
-      allObservations.length > 0 ? allObservations.join(" – ") : "";
+    const incotermLabel = orderHeader.incoterm || "FOB";
+    const orderBlockExtra = orderHeader.status === "deleted" ? "opacity:0.6;text-decoration:line-through;" : "";
 
-    const formattedNave       = orderHeader.nave         || "";
-    const formattedPais       = orderHeader.deNombrePais || "";
-    const formattedFechaCarga = orderHeader.fechaCarga
-      ? formatDateToSpanish(orderHeader.fechaCarga)
-      : "";
-    const formattedExporta    = orderHeader.exporta  || "";
-    const incotermLabel       = orderHeader.incoterm || "FOB";
-
-    const orderBlockExtra = orderHeader.status === "deleted"
-      ? "opacity:0.6;text-decoration:line-through;"
-      : "";
-
-    // ── Styles ───────────────────────────────────────────────────────────────
-    // <p> inside the header section
-    const pStyle     = "margin:0;margin-bottom:3px;font-family:Arial,sans-serif;font-size:13px;color:#333333;line-height:1.5;";
-    const pLastStyle = "margin:0;font-family:Arial,sans-serif;font-size:13px;color:#333333;line-height:1.5;";
-
-    // Table <th> — blue header matching the published version
+    // ── Estilos de Celda ─────────────────────────────────────────────────────
     const thStyle =
       "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#ffffff;" +
-      "background-color:#2563eb;padding:4px 6px;" +
-      "border-top:1px solid #1e40af;border-bottom:1px solid #1e40af;" +
-      "border-left:1px solid #1e40af;border-right:1px solid #1e40af;" +
+      "background-color:#2563eb;padding:8px 12px;border:1px solid #1e40af;" +
       "text-align:center;white-space:nowrap;vertical-align:middle;";
 
-    // Table <td> base — border matches the card border (#dddddd) so there's no
-    // visual seam between the last column and the card edge
     const tdBase =
       "font-family:Arial,sans-serif;font-size:11px;color:#333333;" +
-      "padding:4px 6px;text-align:center;white-space:nowrap;vertical-align:middle;" +
-      "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
-      "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
+      "padding:8px 12px;text-align:center;vertical-align:middle;" +
+      "border:1px solid #dddddd;white-space:nowrap;";
 
-    // Total row — light gray matching the screenshot
-    const tdTotalLabel =
-      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;" +
-      "background-color:#f0f0f0;padding:5px 12px 5px 6px;text-align:right;" +
-      "white-space:nowrap;vertical-align:middle;" +
-      "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
-      "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
-
-    const tdTotalValue =
-      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;" +
-      "background-color:#f0f0f0;padding:5px 6px;text-align:center;" +
-      "white-space:nowrap;vertical-align:middle;" +
-      "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
-      "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
-
-    // ── Data rows ─────────────────────────────────────────────────────────────
     const dataRowsHtml = orderItemsData
       .map((item, idx) => {
         const rowBg = idx % 2 === 0 ? "#f9f9f9" : "#ffffff";
-        const cancelExtra = item.isCanceled
-          ? "color:#ef4444;text-decoration:line-through;"
-          : "";
+        const cancelExtra = item.isCanceled ? "color:#ef4444;text-decoration:line-through;" : "";
         const td = tdBase + `background-color:${rowBg};` + cancelExtra;
         return (
           `<tr style="background-color:${rowBg};">` +
@@ -1621,45 +1580,54 @@ const App = () => {
       .join("");
 
     // ── HTML output ───────────────────────────────────────────────────────────
-    // The outer <!--[if mso]> wrapper forces Outlook Desktop to allocate 100% width
-    // for the card div (Outlook ignores max-width on divs without this hint).
-    // Modern clients (Gmail, Apple Mail, Outlook Web) use the div directly.
     return `
-<!--[if mso]><table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;"><tr><td style="padding:0;"><![endif]-->
-<div style="font-family:Arial,sans-serif;font-size:14px;color:#333333;margin-bottom:20px;background-color:#ffffff;border:1px solid #dddddd;border-radius:8px;padding:15px;width:100%;max-width:900px;text-align:left;box-sizing:border-box;${orderBlockExtra}">
+<div style="margin-bottom:25px; ${orderBlockExtra}">
+  <table align="left" border="0" cellpadding="0" cellspacing="0" style="background-color:#ffffff; border:1px solid #dddddd; border-radius:8px; border-collapse:separate; width:auto; box-sizing:border-box;">
+    <tr>
+      <td style="padding:18px; font-family:Arial,sans-serif;">
+        
+        <div style="margin-bottom:15px; line-height:1.6;">
+          <p style="margin:0; font-size:13px; color:#333333;"><strong style="color:#000000;">País:</strong> ${orderHeader.deNombrePais || ""}</p>
+          <p style="margin:0; font-size:13px; color:#333333;"><strong style="color:#000000;">Nave:</strong> ${orderHeader.nave || ""}</p>
+          <p style="margin:0; font-size:13px; color:#333333;"><strong style="color:#000000;">Fecha de carga:</strong> ${orderHeader.fechaCarga ? formatDateToSpanish(orderHeader.fechaCarga) : ""}</p>
+          <p style="margin:0; font-size:13px; color:#333333;"><strong style="color:#000000;">Exporta:</strong> ${orderHeader.exporta || ""}</p>
+        </div>
 
-  <div style="padding-bottom:10px;border-bottom:1px solid #eeeeee;margin-bottom:12px;">
-    <p style="${pStyle}"><strong style="font-weight:bold;">País:</strong> ${formattedPais}</p>
-    <p style="${pStyle}"><strong style="font-weight:bold;">Nave:</strong> ${formattedNave}</p>
-    <p style="${pStyle}"><strong style="font-weight:bold;">Fecha de carga:</strong> ${formattedFechaCarga}</p>
-    <p style="${pLastStyle}"><strong style="font-weight:bold;">Exporta:</strong> ${formattedExporta}</p>
-  </div>
+        <div style="border-radius:6px; overflow:hidden;">
+          <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse; width:auto; table-layout:auto;">
+            <thead>
+              <tr style="background-color:#2563eb;">
+                <th style="${thStyle}">Pallets</th>
+                <th style="${thStyle}">Especie</th>
+                <th style="${thStyle}">Variedad</th>
+                <th style="${thStyle}">Formato</th>
+                <th style="${thStyle}">Calibre</th>
+                <th style="${thStyle}">Categoría</th>
+                <th style="${thStyle}">Precios ${incotermLabel}</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${dataRowsHtml}
+              <tr style="background-color:#f0f0f0; font-weight:bold;">
+                <td colspan="6" style="${tdBase} text-align:right; border:1px solid #dddddd; background-color:#f0f0f0;">Total de Pallets:</td>
+                <td style="${tdBase} border:1px solid #dddddd; background-color:#f0f0f0;">${singleOrderTotalPallets} Pallets</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
-  <table cellpadding="0" cellspacing="0" border="0"
-    style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;width:100%;table-layout:fixed;margin-top:8px;">
-    <thead>
-      <tr style="background-color:#2563eb;">
-        <th style="${thStyle}">Pallets</th>
-        <th style="${thStyle}">Especie</th>
-        <th style="${thStyle}">Variedad</th>
-        <th style="${thStyle}">Formato</th>
-        <th style="${thStyle}">Calibre</th>
-        <th style="${thStyle}">Categoría</th>
-        <th style="${thStyle}">Precios ${incotermLabel}</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${dataRowsHtml}
-      <tr style="background-color:#f0f0f0;">
-        <td colspan="6" style="${tdTotalLabel}">Total de Pallets:</td>
-        <td colspan="1" style="${tdTotalValue}">${singleOrderTotalPallets} Pallets</td>
-      </tr>
-    </tbody>
+        ${consolidatedObservationsText ? `
+        <div style="margin-top:15px; max-width:550px;">
+          <p style="margin:0; font-size:12px; color:#666666; font-style:italic; line-height:1.4;">
+            <strong style="font-style:normal; color:#333333;">Observaciones:</strong> ${consolidatedObservationsText}
+          </p>
+        </div>` : ''}
+
+      </td>
+    </tr>
   </table>
+  <div style="clear:both;"></div>
 
-  <p style="margin-top:10px;margin-bottom:0;font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#333333;">
-    Observaciones: <span style="font-weight:normal;font-style:italic;color:#555555;">${consolidatedObservationsText}</span>
-  </p>
 
 </div>
 <!--[if mso]></td></tr></table><![endif]-->`;

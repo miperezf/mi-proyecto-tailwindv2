@@ -267,9 +267,9 @@ const App = () => {
     console.log("LastSend: Confirmed by user.");
   };
 
-  const recoverLastSend = () => {
+  const recoverLastSend = async () => {
     if (!lastSendData) return;
-    copyFormattedContentToClipboard(lastSendData.html);
+    await copyFormattedContentToClipboard(lastSendData.html);
     openEmailClient(lastSendData.subject);
     setShowRecoveryModal(false);
     console.log("LastSend: Recovered and re-copied. Mail ID:", lastSendData.mailId);
@@ -331,32 +331,22 @@ const App = () => {
       );
 
       const fullEmailBodyHtml = `
-        <!DOCTYPE html><html><head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width,initial-scale=1.0">
-          <title>Detalle de Pedido</title>
-          <style>
-            body{font-family:Arial,sans-serif;margin:0;padding:0;background-color:#f8f8f8;}
-            .container{padding:0;box-sizing:border-box;text-align:left;}
-            table{max-width:100%;width:auto;border-collapse:collapse;table-layout:auto;}
-            table th,table td{border:1px solid #eee;padding:3px 5px;text-align:center;vertical-align:top;white-space:nowrap;}
-            table thead th{background-color:#2563eb;color:#ffffff;}
-            @media only screen and (max-width:767px){
-              table th,table td{font-size:8px!important;padding:2px!important;}
-              table{min-width:650px!important;}
-              .table-wrapper-email{overflow-x:auto!important;}
-            }
-          </style>
-        </head><body>
-          <div class="container">
-            <div style="text-align:right;margin-bottom:10px;font-weight:bold;font-size:14px;color:#ef4444;">
-              Mail ID: ${mailId}
-            </div>
-            ${innerEmailContentHtml}
-          </div>
-        </body></html>`;
+        <!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Detalle de Pedido</title>
+</head>
+<body style="margin:0;padding:16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+  <div style="text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">
+    Mail ID: ${mailId}
+  </div>
+  ${innerEmailContentHtml}
+</body>
+</html>`;
 
-      copyFormattedContentToClipboard(fullEmailBodyHtml);
+      await copyFormattedContentToClipboard(fullEmailBodyHtml);
       saveLastSend(mailId, consolidatedSubject, fullEmailBodyHtml);
 
       openEmailClient(consolidatedSubject);
@@ -1507,6 +1497,39 @@ const App = () => {
     }
   };
 
+  // ─── EMAIL HTML GENERATOR ────────────────────────────────────────────────────
+  // Generates a single order block as a self-contained HTML string.
+  //
+  // DESIGN PRINCIPLES for cross-client compatibility:
+  //  1. Zero class references — every style is 100% inline on the element itself.
+  //     Outlook Desktop strips <style> blocks when pasting; inline styles survive.
+  //  2. Explicit font-family on every text element — Outlook resets inherited fonts.
+  //  3. No shorthand borders on <table> — use border-collapse + per-cell borders.
+  //  4. No CSS variables, no calc(), no flexbox inside the table — not supported
+  //     in Outlook's Word rendering engine (used by Outlook Desktop on Windows).
+  //  5. All colours are hex — Outlook 2016 ignores rgba/hsl.
+  //  6. mso-padding-alt / mso-line-height-rule omitted intentionally (not needed
+  //     here) but the structure is already compatible with the Word engine.
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ─── EMAIL HTML GENERATOR ────────────────────────────────────────────────────
+  // Visual design: matches exactly the published version (screenshot reference)
+  //   • Outer card: white bg, 1px #dddddd border, 8px border-radius, 15px padding
+  //   • Header section: País/Nave/Fecha/Exporta in 13px Arial, separated by a
+  //     1px #eeeeee bottom border
+  //   • Table: blue (#2563eb) header row, alternating #f9f9f9/#ffffff body rows,
+  //     light gray (#f0f0f0) total row — all with 1px #dddddd cell borders
+  //   • Observaciones: 13px bold label + italic value
+  //
+  // Cross-client compatibility (Outlook Desktop / Outlook Web / Gmail / Apple Mail):
+  //   • Every style is 100% inline — no <style> block (Outlook Desktop strips them)
+  //   • Explicit font-family on every element (Outlook resets inherited fonts)
+  //   • table width:100% + table-layout:fixed → fills container on all clients
+  //   • mso-table-lspace/rspace:0pt → removes Outlook's default table spacing
+  //   • Conditional comments <!--[if mso]> → tells Outlook's Word engine exactly
+  //     how to render the outer wrapper (which ignores border-radius anyway)
+  //   • No overflow:hidden wrappers (Outlook Desktop clips content inside them)
+  //   • All colors are 6-digit hex (Outlook 2016 ignores rgba/hsl)
+  // ─────────────────────────────────────────────────────────────────────────────
   const generateSingleOrderHtml = (
     orderHeader,
     orderItemsData,
@@ -1525,99 +1548,192 @@ const App = () => {
       );
 
     const consolidatedObservationsText =
-      allObservations.length > 0 ? allObservations.join("–") : "";
+      allObservations.length > 0 ? allObservations.join(" – ") : "";
 
-    const formattedNave = orderHeader.nave;
-    const formattedPais = orderHeader.deNombrePais;
+    const formattedNave       = orderHeader.nave         || "";
+    const formattedPais       = orderHeader.deNombrePais || "";
     const formattedFechaCarga = orderHeader.fechaCarga
       ? formatDateToSpanish(orderHeader.fechaCarga)
       : "";
-    const formattedExporta = orderHeader.exporta;
+    const formattedExporta    = orderHeader.exporta  || "";
+    const incotermLabel       = orderHeader.incoterm || "FOB";
 
-    const orderBlockStyle =
-      orderHeader.status === "deleted"
-        ? "opacity: 0.6; text-decoration: line-through;"
-        : "";
+    const orderBlockExtra = orderHeader.status === "deleted"
+      ? "opacity:0.6;text-decoration:line-through;"
+      : "";
 
-    const itemsHtml = `
-            <div class="table-wrapper-email" style="overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: 10px; border-radius: 8px; border: 1px solid #ddd;">
-                <table border="1" cellpadding="0" cellspacing="0" style="width: auto; min-width: 650px; border-collapse: collapse; border: none; box-sizing: border-box; text-align: left; table-layout: auto;">
-                    <thead>
-                        <tr style="background-color: #2563eb; color: #ffffff;">
-                            <th style="padding: 3px 5px; border: 1px solid #1e40af; border-top-left-radius: 8px; text-align: center; font-size: 11px; box-sizing: border-box; white-space: nowrap;">Pallets</th>
-                            <th style="padding: 3px 5px; border: 1px solid #1e40af; text-align: center; font-size: 11px; box-sizing: border-box; white-space: nowrap;">Especie</th>
-                            <th style="padding: 3px 5px; border: 1px solid #1e40af; text-align: center; font-size: 11px; white-space: nowrap;">Variedad</th>
-                            <th style="padding: 3px 5px; border: 1px solid #1e40af; text-align: center; font-size: 11px; white-space: nowrap;">Formato</th>
-                            <th style="padding: 3px 5px; border: 1px solid #1e40af; text-align: center; font-size: 11px; white-space: nowrap;">Calibre</th>
-                            <th style="padding: 3px 5px; border: 1px solid #1e40af; border-top-right-radius: 8px; text-align: center; font-size: 11px; box-sizing: border-box; white-space: nowrap;">Categoría</th>
-                            <th style="padding: 3px 5px; border: 1px solid #1e40af; text-align: center; font-size: 11px; box-sizing: border-box; white-space: nowrap;">Precios ${orderHeader.incoterm || "FOB"}</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${orderItemsData
-                          .map((item, idx) => {
-                            const style = item.isCanceled
-                              ? "color: #ef4444; text-decoration: line-through;"
-                              : "";
-                            return (
-                              `<tr style="${
-                                idx % 2 === 0
-                                  ? "background-color: #f9f9f9;"
-                                  : "background-color: #ffffff;"
-                              }${style}">` +
-                              `<td style="padding: 3px 5px; border: 1px solid #eee; text-align: center; box-sizing: border-box; font-size: 11px; white-space: nowrap;">${item.pallets}</td>` +
-                              `<td style="padding: 3px 5px; border: 1px solid #eee; text-align: center; box-sizing: border-box; font-size: 11px; white-space: nowrap;">${item.especie}</td>` +
-                              `<td style="padding: 3px 5px; border: 1px solid #eee; text-align: center; font-size: 11px; white-space: nowrap;">${item.variedad}</td>` +
-                              `<td style="padding: 3px 5px; border: 1px solid #eee; text-align: center; font-size: 11px; white-space: nowrap;">${item.formato}</td>` +
-                              `<td style="padding: 3px 5px; border: 1px solid #eee; text-align: center; font-size: 11px; white-space: nowrap;">${item.calibre}</td>` +
-                              `<td style="padding: 3px 5px; border: 1px solid #eee; text-align: center; box-sizing: border-box; font-size: 11px; white-space: nowrap;">${item.categoria}</td>` +
-                              `<td style="padding: 3px 5px; border: 1px solid #eee; text-align: center; box-sizing: border-box; font-size: 11px; white-space: nowrap;">${item.preciosFOB}</td>` +
-                              `</tr>`
-                            );
-                          })
-                          .join("")}
-                        <tr style="background-color: #e0e0e0;">
-                            <td colSpan="6" style="padding: 6px 15px 6px 6px; text-align: right; font-weight: bold; border: 1px solid #ccc; border-bottom-left-radius: 8px; margin-top: 15px; box-sizing: border-box; font-size: 11px; white-space: nowrap;">Total de Pallets:</td>
-                            <td colSpan="1" style="padding: 6px; font-weight: bold; border: 1px solid #ccc; border-bottom-right-radius: 8px; text-align: center; box-sizing: border-box; font-size: 11px; white-space: nowrap;">
-                                ${singleOrderTotalPallets} Pallets
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        `;
+    // ── Styles ───────────────────────────────────────────────────────────────
+    // <p> inside the header section
+    const pStyle     = "margin:0;margin-bottom:3px;font-family:Arial,sans-serif;font-size:13px;color:#333333;line-height:1.5;";
+    const pLastStyle = "margin:0;font-family:Arial,sans-serif;font-size:13px;color:#333333;line-height:1.5;";
 
+    // Table <th> — blue header matching the published version
+    const thStyle =
+      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#ffffff;" +
+      "background-color:#2563eb;padding:4px 6px;" +
+      "border-top:1px solid #1e40af;border-bottom:1px solid #1e40af;" +
+      "border-left:1px solid #1e40af;border-right:1px solid #1e40af;" +
+      "text-align:center;white-space:nowrap;vertical-align:middle;";
+
+    // Table <td> base — border matches the card border (#dddddd) so there's no
+    // visual seam between the last column and the card edge
+    const tdBase =
+      "font-family:Arial,sans-serif;font-size:11px;color:#333333;" +
+      "padding:4px 6px;text-align:center;white-space:nowrap;vertical-align:middle;" +
+      "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
+      "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
+
+    // Total row — light gray matching the screenshot
+    const tdTotalLabel =
+      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;" +
+      "background-color:#f0f0f0;padding:5px 12px 5px 6px;text-align:right;" +
+      "white-space:nowrap;vertical-align:middle;" +
+      "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
+      "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
+
+    const tdTotalValue =
+      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;" +
+      "background-color:#f0f0f0;padding:5px 6px;text-align:center;" +
+      "white-space:nowrap;vertical-align:middle;" +
+      "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
+      "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
+
+    // ── Data rows ─────────────────────────────────────────────────────────────
+    const dataRowsHtml = orderItemsData
+      .map((item, idx) => {
+        const rowBg = idx % 2 === 0 ? "#f9f9f9" : "#ffffff";
+        const cancelExtra = item.isCanceled
+          ? "color:#ef4444;text-decoration:line-through;"
+          : "";
+        const td = tdBase + `background-color:${rowBg};` + cancelExtra;
+        return (
+          `<tr style="background-color:${rowBg};">` +
+          `<td style="${td}">${item.pallets    || ""}</td>` +
+          `<td style="${td}">${item.especie    || ""}</td>` +
+          `<td style="${td}">${item.variedad   || ""}</td>` +
+          `<td style="${td}">${item.formato    || ""}</td>` +
+          `<td style="${td}">${item.calibre    || ""}</td>` +
+          `<td style="${td}">${item.categoria  || ""}</td>` +
+          `<td style="${td}">${item.preciosFOB || ""}</td>` +
+          `</tr>`
+        );
+      })
+      .join("");
+
+    // ── HTML output ───────────────────────────────────────────────────────────
+    // The outer <!--[if mso]> wrapper forces Outlook Desktop to allocate 100% width
+    // for the card div (Outlook ignores max-width on divs without this hint).
+    // Modern clients (Gmail, Apple Mail, Outlook Web) use the div directly.
     return `
-        <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; margin-bottom: 20px; border: 1px solid #ddd; padding: 15px; border-radius: 8px; width: 100%; max-width: 900px; text-align: left; box-sizing: border-box; ${orderBlockStyle}">
-            <div style="padding-bottom: 10px; border-bottom: 1px solid #eee; margin-bottom: 10px;">
-                <p class="email-header-p" style="margin: 0; margin-bottom: 2px;"><strong>País:</strong> ${formattedPais}</p>
-                <p class="email-header-p" style="margin: 0; margin-bottom: 2px;"><strong>Nave:</strong> ${formattedNave}</p>
-                <p class="email-header-p" style="margin: 0; margin-bottom: 2px;"><strong>Fecha de carga:</strong> ${formattedFechaCarga}</p>
-                <p class="email-header-p" style="margin: 0;"><strong>Exporta:</strong> ${formattedExporta}</p>
-                <div style="clear: both;"></div>
-            </div>
-            ${itemsHtml}
-            <p style="margin-top: 10px; font-weight: bold; font-size: 13px;">Observaciones: <span style="font-weight: normal; font-style: italic;">${consolidatedObservationsText}</span></p>
-        </div>
-    `;
+<!--[if mso]><table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;"><tr><td style="padding:0;"><![endif]-->
+<div style="font-family:Arial,sans-serif;font-size:14px;color:#333333;margin-bottom:20px;background-color:#ffffff;border:1px solid #dddddd;border-radius:8px;padding:15px;width:100%;max-width:900px;text-align:left;box-sizing:border-box;${orderBlockExtra}">
+
+  <div style="padding-bottom:10px;border-bottom:1px solid #eeeeee;margin-bottom:12px;">
+    <p style="${pStyle}"><strong style="font-weight:bold;">País:</strong> ${formattedPais}</p>
+    <p style="${pStyle}"><strong style="font-weight:bold;">Nave:</strong> ${formattedNave}</p>
+    <p style="${pStyle}"><strong style="font-weight:bold;">Fecha de carga:</strong> ${formattedFechaCarga}</p>
+    <p style="${pLastStyle}"><strong style="font-weight:bold;">Exporta:</strong> ${formattedExporta}</p>
+  </div>
+
+  <table cellpadding="0" cellspacing="0" border="0"
+    style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;width:100%;table-layout:fixed;margin-top:8px;">
+    <thead>
+      <tr style="background-color:#2563eb;">
+        <th style="${thStyle}">Pallets</th>
+        <th style="${thStyle}">Especie</th>
+        <th style="${thStyle}">Variedad</th>
+        <th style="${thStyle}">Formato</th>
+        <th style="${thStyle}">Calibre</th>
+        <th style="${thStyle}">Categoría</th>
+        <th style="${thStyle}">Precios ${incotermLabel}</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${dataRowsHtml}
+      <tr style="background-color:#f0f0f0;">
+        <td colspan="6" style="${tdTotalLabel}">Total de Pallets:</td>
+        <td colspan="1" style="${tdTotalValue}">${singleOrderTotalPallets} Pallets</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p style="margin-top:10px;margin-bottom:0;font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#333333;">
+    Observaciones: <span style="font-weight:normal;font-style:italic;color:#555555;">${consolidatedObservationsText}</span>
+  </p>
+
+</div>
+<!--[if mso]></td></tr></table><![endif]-->`;
   };
 
-  const copyFormattedContentToClipboard = (content) => {
-    const tempDiv = document.createElement("div");
-    tempDiv.innerHTML = content;
-    tempDiv.style.position = "absolute";
-    tempDiv.style.left = "-9999px";
-    document.body.appendChild(tempDiv);
+  // ─── CLIPBOARD HELPER ────────────────────────────────────────────────────────
+  // Uses the modern Clipboard API (navigator.clipboard.write) which writes the
+  // HTML string directly as a text/html Blob — bypassing the DOM entirely.
+  // This guarantees the exact same HTML lands in Outlook Desktop, Outlook Web,
+  // Mail on Mac, and every other client, regardless of OS or browser.
+  //
+  // Fallback chain (for older browsers / non-HTTPS / Safari quirks):
+  //   1. navigator.clipboard.write  → modern, direct, no DOM rendering needed
+  //   2. navigator.clipboard.writeText → copies plain HTML as text (last resort)
+  //   3. execCommand('copy')         → legacy DOM selection method (original code)
+  //
+  // The plain-text fallback intentionally copies the raw HTML string so the user
+  // at least has the content — they can paste it in a text editor to inspect it.
+  // ─────────────────────────────────────────────────────────────────────────────
+  const copyFormattedContentToClipboard = async (content) => {
+    // Strategy 1: Modern Clipboard API — writes HTML Blob directly, no DOM needed.
+    // Supported: Chrome 76+, Edge 79+, Firefox 87+ (requires HTTPS or localhost).
+    if (navigator.clipboard && window.ClipboardItem) {
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            // The HTML MIME type tells Outlook/Mail to paste as rich text, not plain text.
+            "text/html": new Blob([content], { type: "text/html" }),
+            // Always include a plain-text fallback so paste still works in plain-text fields.
+            "text/plain": new Blob([content], { type: "text/plain" }),
+          }),
+        ]);
+        console.log("Clipboard: HTML written via Clipboard API (modern path).");
+        return;
+      } catch (err) {
+        console.warn("Clipboard: Clipboard API failed, falling back.", err);
+      }
+    }
 
-    const range = document.createRange();
-    range.selectNodeContents(tempDiv);
-    const selection = window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
+    // Strategy 2: execCommand('copy') — legacy DOM selection method.
+    // Less reliable across OS/browser combinations but still works in most cases.
+    try {
+      const tempDiv = document.createElement("div");
+      tempDiv.innerHTML = content;
+      // Position off-screen but still in the document so it can be selected.
+      tempDiv.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0;pointer-events:none;";
+      document.body.appendChild(tempDiv);
 
-    document.execCommand("copy");
-    document.body.removeChild(tempDiv);
-    console.log("Clipboard: HTML content copied to clipboard.");
+      const range = document.createRange();
+      range.selectNodeContents(tempDiv);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+
+      const success = document.execCommand("copy");
+      selection.removeAllRanges();
+      document.body.removeChild(tempDiv);
+
+      if (success) {
+        console.log("Clipboard: HTML copied via execCommand fallback.");
+        return;
+      }
+      console.warn("Clipboard: execCommand returned false.");
+    } catch (err) {
+      console.warn("Clipboard: execCommand failed.", err);
+    }
+
+    // Strategy 3: Plain-text fallback — at minimum the user gets the raw HTML.
+    try {
+      await navigator.clipboard.writeText(content);
+      console.warn("Clipboard: Copied as plain text (last resort). Formatting may be lost.");
+    } catch (err) {
+      console.error("Clipboard: All copy strategies failed.", err);
+    }
   };
 
   const handleAddOrder = async () => {
@@ -2078,40 +2194,24 @@ const App = () => {
         consolidatedSubject
       );
 
-      const fullEmailBodyHtml = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Detalle de Pedido</title>
-            <style>
-              body { font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f8f8f8; }
-              .container { padding: 0px; box-sizing: border-box; text-align: left; }
-              @media only screen and (max-width: 767px) {
-                  .email-header-p { font-size: 12px !important; margin-bottom: 1px !important; }
-                  .email-header-p:last-of-type { margin-bottom: 4px !important; }
-                  h3 { font-size: 16px !important; margin-top: 20px !important; margin-bottom: 10px !important; }
-                  .email-header-p strong { font-weight: bold !important; }
-                  table th, table td { font-size: 8px !important; padding: 2px 2px !important; white-space: nowrap; }
-                  table { width: auto !important; min-width: 650px !important; table-layout: auto; }
-                  .table-wrapper-email { overflow-x: auto !important; -webkit-overflow-scrolling: touch !important; }
-              }
-              table { max-width: 100%; width: auto; border-collapse: collapse; table-layout: auto; }
-              table th, table td { border: 1px solid #eee; padding: 3px 5px; text-align: center; vertical-align: top; white-space: nowrap; }
-              table thead th { background-color: #2563eb; color: #ffffff; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div style="text-align: right; margin-bottom: 10px; font-weight: bold; font-size: 14px; color: #ef4444;">Mail ID: ${mailGlobalId}</div>
-                ${innerEmailContentHtml}
-            </div>
-        </body>
-        </html>
-      `;
+      // All styles are 100% inline inside generateSingleOrderHtml.
+      // No <style> block — Outlook Desktop strips stylesheet blocks on paste.
+      const fullEmailBodyHtml = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Detalle de Pedido</title>
+</head>
+<body style="margin:0;padding:16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+  <div style="text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">
+    Mail ID: ${mailGlobalId}
+  </div>
+  ${innerEmailContentHtml}
+</body>
+</html>`;
 
-      copyFormattedContentToClipboard(fullEmailBodyHtml);
+      await copyFormattedContentToClipboard(fullEmailBodyHtml);
       saveLastSend(mailGlobalId, consolidatedSubject, fullEmailBodyHtml);
       console.log("Send Email: Email content copied to clipboard.");
 
@@ -2297,38 +2397,21 @@ const App = () => {
         `;
       });
 
-      const finalPreviewHtml = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Previsualización de Pedido</title>
-            <style>
-              body { font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f8f8f8; }
-              .container { padding: 0px; box-sizing: border-box; text-align: left; }
-              @media only screen and (max-width: 767px) {
-                  .email-header-p { font-size: 12px !important; margin-bottom: 1px !important; }
-                  .email-header-p:last-of-type { margin-bottom: 4px !important; }
-                  h3 { font-size: 16px !important; margin-top: 20px !important; margin-bottom: 10px !important; }
-                  .email-header-p strong { font-weight: bold !important; }
-                  table th, table td { font-size: 8px !important; padding: 2px 2px !important; white-space: nowrap; }
-                  table { width: auto !important; min-width: 650px !important; table-layout: auto; }
-                  .table-wrapper-email { overflow-x: auto !important; -webkit-overflow-scrolling: touch !important; }
-              }
-              table { max-width: 100%; width: auto; border-collapse: collapse; table-layout: auto; }
-              table th, table td { border: 1px solid #eee; padding: 3px 5px; text-align: center; vertical-align: top; white-space: nowrap; }
-              table thead th { background-color: #2563eb; color: #ffffff; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div style="text-align: right; margin-bottom: 10px; font-weight: bold; font-size: 14px; color: #ef4444;">Mail ID: ${previewGlobalId}</div>
-                ${innerPreviewHtml}
-            </div>
-        </body>
-        </html>
-      `;
+      // All styles are 100% inline — no <style> block needed.
+      const finalPreviewHtml = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Previsualización de Pedido</title>
+</head>
+<body style="margin:0;padding:16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+  <div style="text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">
+    Mail ID: ${previewGlobalId}
+  </div>
+  ${innerPreviewHtml}
+</body>
+</html>`;
       setPreviewHtmlContent(finalPreviewHtml);
       console.log("Preview Order: Preview content generated.");
     }

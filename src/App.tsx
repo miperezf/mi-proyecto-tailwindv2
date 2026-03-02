@@ -1531,102 +1531,103 @@ const App = () => {
   //   • All colors are 6-digit hex (Outlook 2016 ignores rgba/hsl)
   // ─────────────────────────────────────────────────────────────────────────────
   const generateSingleOrderHtml = (
-    orderHeader,
-    orderItemsData,
-    orderNumber
-  ) => {
-    const nonCancelledItems = orderItemsData.filter((item) => !item.isCanceled);
-    const singleOrderTotalPallets = nonCancelledItems.reduce((sum, item) => {
-      const pallets = parseFloat(item.pallets) || 0;
-      return sum + pallets;
-    }, 0);
+  orderHeader,
+  orderItemsData,
+  orderNumber
+) => {
+  const nonCancelledItems = orderItemsData.filter((item) => !item.isCanceled);
+  const singleOrderTotalPallets = nonCancelledItems.reduce((sum, item) => {
+    const pallets = parseFloat(item.pallets) || 0;
+    return sum + pallets;
+  }, 0);
 
-    const consolidatedObservationsText = orderItemsData
-      .map((item) => item.estado)
-      .filter((obs) => obs && obs.trim() !== "" && obs.toUpperCase() !== "CANCELADO")
-      .join(" – ");
+  const consolidatedObservationsText = orderItemsData
+    .map((item) => item.estado)
+    .filter((obs) => obs && obs.trim() !== "" && obs.toUpperCase() !== "CANCELADO")
+    .join(" – ");
 
-    const incotermLabel = orderHeader.incoterm || "FOB";
-    const orderBlockExtra = orderHeader.status === "deleted" ? "opacity:0.6;text-decoration:line-through;" : "";
+  const incotermLabel = orderHeader.incoterm || "FOB";
+  const orderBlockExtra = orderHeader.status === "deleted" ? "opacity:0.6;text-decoration:line-through;" : "";
 
-    // ── Estilos de Celda ─────────────────────────────────────────────────────
-    const thStyle =
-      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#ffffff;" +
-      "background-color:#2563eb;padding:8px 12px;border:1px solid #1e40af;" +
-      "text-align:center;white-space:nowrap;vertical-align:middle;";
+  // ── Estilos de Celda ─────────────────────────────────────────────────────
+  const thStyle =
+    "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#ffffff;" +
+    "background-color:#2563eb;padding:8px 12px;border:1px solid #1e40af;" +
+    "text-align:center;white-space:nowrap;vertical-align:middle;";
 
-    const tdBase =
-      "font-family:Arial,sans-serif;font-size:11px;color:#333333;" +
-      "padding:8px 12px;text-align:center;vertical-align:middle;" +
-      "border:1px solid #dddddd;white-space:nowrap;";
+  const tdBase =
+    "font-family:Arial,sans-serif;font-size:11px;color:#333333;" +
+    "padding:8px 12px;text-align:center;vertical-align:middle;" +
+    "border:1px solid #dddddd;white-space:nowrap;";
 
-    const dataRowsHtml = orderItemsData
-      .map((item, idx) => {
-        const rowBg = idx % 2 === 0 ? "#f9f9f9" : "#ffffff";
-        const cancelExtra = item.isCanceled ? "color:#ef4444;text-decoration:line-through;" : "";
-        const td = tdBase + `background-color:${rowBg};` + cancelExtra;
-        return (
-          `<tr style="background-color:${rowBg};">` +
-          `<td style="${td}">${item.pallets    || ""}</td>` +
-          `<td style="${td}">${item.especie    || ""}</td>` +
-          `<td style="${td}">${item.variedad   || ""}</td>` +
-          `<td style="${td}">${item.formato    || ""}</td>` +
-          `<td style="${td}">${item.calibre    || ""}</td>` +
-          `<td style="${td}">${item.categoria  || ""}</td>` +
-          `<td style="${td}">${item.preciosFOB || ""}</td>` +
-          `</tr>`
-        );
-      })
-      .join("");
+  const dataRowsHtml = orderItemsData
+    .map((item, idx) => {
+      const rowBg = idx % 2 === 0 ? "#f9f9f9" : "#ffffff";
+      const cancelExtra = item.isCanceled ? "color:#ef4444;text-decoration:line-through;" : "";
+      const td = tdBase + `background-color:${rowBg};` + cancelExtra;
+      return (
+        `<tr style="background-color:${rowBg};">` +
+        `<td style="${td}">${item.pallets    || ""}</td>` +
+        `<td style="${td}">${item.especie    || ""}</td>` +
+        `<td style="${td}">${item.variedad   || ""}</td>` +
+        `<td style="${td}">${item.formato    || ""}</td>` +
+        `<td style="${td}">${item.calibre    || ""}</td>` +
+        `<td style="${td}">${item.categoria  || ""}</td>` +
+        `<td style="${td}">${item.preciosFOB || ""}</td>` +
+        `</tr>`
+      );
+    })
+    .join("");
 
-    // ── HTML output ───────────────────────────────────────────────────────────
-    return `
-<div style="margin-bottom:25px; ${orderBlockExtra}">
-  <table align="left" border="0" cellpadding="0" cellspacing="0" style="background-color:#ffffff; border:1px solid #dddddd; border-radius:8px; border-collapse:separate; width:auto; box-sizing:border-box;">
+  // ── HTML output ───────────────────────────────────────────────────────────
+  return `
+<div style="margin-bottom:30px; display:block; ${orderBlockExtra}">
+  <table border="0" cellpadding="0" cellspacing="0" style="background-color:#ffffff; border:1px solid #dddddd; border-radius:8px; border-collapse:separate; width:auto; box-sizing:border-box; margin-bottom:10px;">
     <tr>
-      <td style="padding:18px; font-family:Arial,sans-serif;">
+      <td style="padding:20px; font-family:Arial,sans-serif;">
         
-        <div style="margin-bottom:15px; line-height:1.6;">
-          <p style="margin:0; font-size:13px; color:#333333;"><strong style="color:#000000;">País:</strong> ${orderHeader.deNombrePais || ""}</p>
-          <p style="margin:0; font-size:13px; color:#333333;"><strong style="color:#000000;">Nave:</strong> ${orderHeader.nave || ""}</p>
-          <p style="margin:0; font-size:13px; color:#333333;"><strong style="color:#000000;">Fecha de carga:</strong> ${orderHeader.fechaCarga ? formatDateToSpanish(orderHeader.fechaCarga) : ""}</p>
-          <p style="margin:0; font-size:13px; color:#333333;"><strong style="color:#000000;">Exporta:</strong> ${orderHeader.exporta || ""}</p>
-        </div>
+        <table border="0" cellpadding="0" cellspacing="0" style="width:100%; margin-bottom:15px;">
+          <tr><td style="padding-bottom:4px; font-family:Arial,sans-serif; font-size:13px; color:#333333; white-space:nowrap;"><strong>País:</strong> ${orderHeader.deNombrePais || ""}</td></tr>
+          <tr><td style="padding-bottom:4px; font-family:Arial,sans-serif; font-size:13px; color:#333333; white-space:nowrap;"><strong>Nave:</strong> ${orderHeader.nave || ""}</td></tr>
+          <tr><td style="padding-bottom:4px; font-family:Arial,sans-serif; font-size:13px; color:#333333; white-space:nowrap;"><strong>Fecha de carga:</strong> ${orderHeader.fechaCarga ? formatDateToSpanish(orderHeader.fechaCarga) : ""}</td></tr>
+          <tr><td style="padding-bottom:0px; font-family:Arial,sans-serif; font-size:13px; color:#333333; white-space:nowrap;"><strong>Exporta:</strong> ${orderHeader.exporta || ""}</td></tr>
+        </table>
 
-        <div style="border-radius:6px; overflow:hidden;">
-          <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse; width:auto; table-layout:auto;">
-            <thead>
-              <tr style="background-color:#2563eb;">
-                <th style="${thStyle}">Pallets</th>
-                <th style="${thStyle}">Especie</th>
-                <th style="${thStyle}">Variedad</th>
-                <th style="${thStyle}">Formato</th>
-                <th style="${thStyle}">Calibre</th>
-                <th style="${thStyle}">Categoría</th>
-                <th style="${thStyle}">Precios ${incotermLabel}</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${dataRowsHtml}
-              <tr style="background-color:#f0f0f0; font-weight:bold;">
-                <td colspan="6" style="${tdBase} text-align:right; border:1px solid #dddddd; background-color:#f0f0f0;">Total de Pallets:</td>
-                <td style="${tdBase} border:1px solid #dddddd; background-color:#f0f0f0;">${singleOrderTotalPallets} Pallets</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse; width:auto; table-layout:auto;">
+          <thead>
+            <tr style="background-color:#2563eb;">
+              <th style="${thStyle}">Pallets</th>
+              <th style="${thStyle}">Especie</th>
+              <th style="${thStyle}">Variedad</th>
+              <th style="${thStyle}">Formato</th>
+              <th style="${thStyle}">Calibre</th>
+              <th style="${thStyle}">Categoría</th>
+              <th style="${thStyle}">Precios ${incotermLabel}</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${dataRowsHtml}
+            <tr style="background-color:#f0f0f0; font-weight:bold;">
+              <td colspan="6" style="${tdBase} text-align:right; border:1px solid #dddddd; background-color:#f0f0f0;">Total de Pallets:</td>
+              <td style="${tdBase} border:1px solid #dddddd; background-color:#f0f0f0;">${singleOrderTotalPallets} Pallets</td>
+            </tr>
+          </tbody>
+        </table>
 
         ${consolidatedObservationsText ? `
-        <div style="margin-top:15px; max-width:550px;">
-          <p style="margin:0; font-size:12px; color:#666666; font-style:italic; line-height:1.4;">
-            <strong style="font-style:normal; color:#333333;">Observaciones:</strong> ${consolidatedObservationsText}
-          </p>
-        </div>` : ''}
+        <table border="0" cellpadding="0" cellspacing="0" style="width:100%; margin-top:15px;">
+          <tr>
+            <td style="font-family:Arial,sans-serif; font-size:12px; color:#666666; font-style:italic;">
+              <strong style="font-style:normal; color:#333333;">Observaciones:</strong> ${consolidatedObservationsText}
+            </td>
+          </tr>
+        </table>` : ''}
 
       </td>
     </tr>
   </table>
-  <div style="clear:both;"></div>
+
+  <br style="clear:both;" />
 
 
 </div>

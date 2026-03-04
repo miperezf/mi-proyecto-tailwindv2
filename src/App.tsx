@@ -620,7 +620,12 @@ const App = () => {
         await updateDoc(orderDocRef, updatePayload);
       }
     } catch (error) {
-      throw error;
+      // Silently ignore permission errors — these happen when trying to save
+      // a document that Firestore rules have locked (e.g. sent/deleted status).
+      // The app should continue normally rather than crashing with an unhandled promise.
+      if (error?.code !== "permission-denied") {
+        console.error("saveOrderToFirestore unexpected error:", error);
+      }
     }
   };
 
@@ -832,11 +837,18 @@ const App = () => {
             order.header?.createdBy === userId
         );
 
-        if (
-          draftOrders.length === 0 &&
+        // Check if the currently active order is still a draft
+        const activeIsStillDraft = draftOrders.some(
+          (o) => o.id === activeOrderIdRef.current
+        );
+        const needsNewDraft =
           !committedSearchTerm &&
-          activeOrderIdRef.current === null
-        ) {
+          draftOrders.length === 0 &&
+          (activeOrderIdRef.current === null || !activeIsStillDraft);
+
+        if (needsNewDraft) {
+          // The only place a new draft is ever created — single source of truth.
+          // Fires on first load OR after a send when there are no drafts left.
           const newOrderDocRef = doc(ordersCollectionRef);
           const newOrderId = newOrderDocRef.id;
           const newBlankHeader = {
@@ -848,9 +860,11 @@ const App = () => {
             createdBy: userId,
             updatedAt: Date.now(),
           };
-          const newBlankItems = [
-            { ...initialItemState, id: crypto.randomUUID() },
-          ];
+          const newBlankItems = [{ ...initialItemState, id: crypto.randomUUID() }];
+          // Set activeOrderId optimistically BEFORE the Firestore write so that
+          // re-entrant snapshot callbacks see a non-null activeOrderIdRef and
+          // don't race to create a second draft (critical in Brave / fast networks).
+          setActiveOrderId(newOrderId);
           try {
             await saveOrderToFirestore({
               id: newOrderId,
@@ -858,8 +872,8 @@ const App = () => {
               header: newBlankHeader,
               items: newBlankItems,
             });
-            setActiveOrderId(newOrderId);
           } catch (saveError) {
+            setActiveOrderId(null);
             setIsLoading(false);
           }
         } else if (
@@ -994,12 +1008,15 @@ const App = () => {
   }, [activeOrderId, displayedOrders]);
 
   const saveCurrentFormDataToDisplayed = async () => {
-    if (!db || !userId) {
-      return;
-    }
-    if (!activeOrderId) {
-      return;
-    }
+    if (!db || !userId) return;
+    if (!activeOrderId) return;
+
+    // Double-guard: check both local state AND displayedOrders (source of truth).
+    // headerInfo.status can lag behind Firestore if the listener hasn't fired yet,
+    // so we also verify the order still exists as a draft in displayedOrders.
+    if (headerInfo.status !== "draft") return;
+    const liveOrder = displayedOrders.find((o) => o.id === activeOrderId);
+    if (!liveOrder || liveOrder.header?.status !== "draft") return;
 
     const currentOrderData = {
       id: activeOrderId,
@@ -1334,6 +1351,30 @@ const App = () => {
       .replace(/'/g, "&#39;");
   };
 
+  // Renders a price string like "$15,00 – $16,00 – $17,00" as inline HTML chips.
+  // Splits on common separators (–, -, /) and wraps each value in a small pill.
+  const renderPriceChips = (priceStr, isCanceled = false) => {
+    if (!priceStr || !priceStr.trim()) return "";
+    const chips = priceStr
+      .split(/\s*[\u2013\u2014\-\/]\s*/)
+      .map(p => p.trim())
+      .filter(Boolean);
+    if (chips.length === 0) return escapeHtml(priceStr);
+    const chipStyle =
+      "display:inline-block;" +
+      "background-color:#dbeafe;" +
+      "color:#1e40af;" +
+      "font-family:Arial,sans-serif;" +
+      "font-size:10px;" +
+      "font-weight:bold;" +
+      "padding:2px 6px;" +
+      "border-radius:10px;" +
+      "margin:2px 2px;" +
+      "white-space:nowrap;" +
+      (isCanceled ? "text-decoration:line-through;color:#ef4444;background-color:#fee2e2;" : "");
+    return chips.map(c => `<span style="${chipStyle}">${escapeHtml(c)}</span>`).join("");
+  };
+
   const generateSingleOrderHtml = (
     orderHeader,
     orderItemsData,
@@ -1372,32 +1413,53 @@ const App = () => {
     const pLastStyle = "margin:0;font-family:Arial,sans-serif;font-size:13px;color:#333333;line-height:1.5;";
 
     // Table <th> — blue header matching the published version
-    const thStyle =
-      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#ffffff;" +
-      "background-color:#2563eb;padding:4px 6px;" +
+    // Pixel widths on <th> are the only reliable way to control column widths
+    // across Gmail, New Outlook (WebKit) and classic Outlook (Word renderer).
+    // Compact email table: total ~420px, font 10px, padding tight.
+    // Widths in px on <th> are the only cross-client reliable sizing method
+    // (Gmail, New Outlook/WebKit, Outlook Desktop/Word all respect them).
+    // Breakdown: 44+62+62+56+44+76+120 = 464px
+    const thBase =
+      "font-family:Arial,sans-serif;font-size:10px;font-weight:bold;color:#ffffff;" +
+      "background-color:#2563eb;padding:3px 8px;" +
       "border-top:1px solid #1e40af;border-bottom:1px solid #1e40af;" +
       "border-left:1px solid #1e40af;border-right:1px solid #1e40af;" +
       "text-align:center;white-space:nowrap;vertical-align:middle;";
+    const thStyle     = thBase;
+    const thPallets   = thBase;
+    const thEspecie   = thBase;
+    const thVariedad  = thBase;
+    const thFormato   = thBase;
+    const thCalibre   = thBase;
+    const thCategoria = thBase;
+    // Precios: min-width so multi-value ranges have room to wrap gracefully
+    const thPrecios   = thBase + "min-width:100px;word-wrap:break-word;white-space:normal;";
 
-    // Table <td> base — border matches the card border (#dddddd) so there's no
-    // visual seam between the last column and the card edge
+    // Table <td> base — matching compact sizing
     const tdBase =
-      "font-family:Arial,sans-serif;font-size:11px;color:#333333;" +
-      "padding:4px 6px;text-align:center;white-space:nowrap;vertical-align:middle;" +
+      "font-family:Arial,sans-serif;font-size:10px;color:#333333;" +
+      "padding:3px 8px;text-align:center;white-space:nowrap;vertical-align:middle;" +
+      "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
+      "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
+    // Precios column: allow wrapping so long ranges never overflow
+    const tdPrecios =
+      "font-family:Arial,sans-serif;font-size:10px;color:#333333;" +
+      "padding:3px 8px;text-align:center;white-space:normal;word-wrap:break-word;vertical-align:middle;" +
       "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
       "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
 
-    // Total row — light gray matching the screenshot
+
+    // Total row — light gray, compact to match table
     const tdTotalLabel =
-      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;" +
-      "background-color:#f0f0f0;padding:5px 12px 5px 6px;text-align:right;" +
+      "font-family:Arial,sans-serif;font-size:10px;font-weight:bold;color:#333333;" +
+      "background-color:#f0f0f0;padding:3px 12px 3px 8px;text-align:right;" +
       "white-space:nowrap;vertical-align:middle;" +
       "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
       "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
 
     const tdTotalValue =
-      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;" +
-      "background-color:#f0f0f0;padding:5px 6px;text-align:center;" +
+      "font-family:Arial,sans-serif;font-size:10px;font-weight:bold;color:#333333;" +
+      "background-color:#f0f0f0;padding:3px 8px;text-align:center;" +
       "white-space:nowrap;vertical-align:middle;" +
       "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
       "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
@@ -1410,6 +1472,7 @@ const App = () => {
           ? "color:#ef4444;text-decoration:line-through;"
           : "";
         const td = tdBase + `background-color:${rowBg};` + cancelExtra;
+        const tdP = tdPrecios + `background-color:${rowBg};` + cancelExtra;
         return (
           `<tr style="background-color:${rowBg};">` +
           `<td style="${td}">${escapeHtml(item.pallets    || "")}</td>` +
@@ -1418,7 +1481,7 @@ const App = () => {
           `<td style="${td}">${escapeHtml(item.formato    || "")}</td>` +
           `<td style="${td}">${escapeHtml(item.calibre    || "")}</td>` +
           `<td style="${td}">${escapeHtml(item.categoria  || "")}</td>` +
-          `<td style="${td}">${escapeHtml(item.preciosFOB || "")}</td>` +
+          `<td style="${tdP}">${escapeHtml(item.preciosFOB || "")}</td>` +
           `</tr>`
         );
       })
@@ -1429,10 +1492,10 @@ const App = () => {
     // for the card div (Outlook ignores max-width on divs without this hint).
     // Modern clients (Gmail, Apple Mail, Outlook Web) use the div directly.
     return `
-<!--[if mso]><table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;"><tr><td style="padding:0;"><![endif]-->
-<div style="font-family:Arial,sans-serif;font-size:14px;color:#333333;margin-bottom:20px;background-color:#ffffff;border:1px solid #dddddd;border-radius:8px;padding:15px;width:100%;max-width:900px;text-align:left;box-sizing:border-box;${orderBlockExtra}">
+<!--[if mso]><table width="auto" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;"><tr><td style="padding:0;"><![endif]-->
+<div style="font-family:Arial,sans-serif;font-size:14px;color:#333333;margin-bottom:20px;background-color:#ffffff;border:1px solid #dddddd;border-radius:8px;padding:15px;display:inline-block;width:auto;text-align:left;box-sizing:border-box;${orderBlockExtra}">
 
-  <div style="padding-bottom:10px;border-bottom:1px solid #eeeeee;margin-bottom:12px;">
+  <div style="padding-bottom:10px;margin-bottom:12px;">
     <p style="${pStyle}"><strong style="font-weight:bold;">País:</strong> ${formattedPais}</p>
     <p style="${pStyle}"><strong style="font-weight:bold;">Nave:</strong> ${formattedNave}</p>
     <p style="${pStyle}"><strong style="font-weight:bold;">Fecha de carga:</strong> ${formattedFechaCarga}</p>
@@ -1440,16 +1503,16 @@ const App = () => {
   </div>
 
   <table cellpadding="0" cellspacing="0" border="0"
-    style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;width:100%;table-layout:fixed;margin-top:8px;">
+    style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;width:auto;table-layout:auto;margin-top:8px;">
     <thead>
       <tr style="background-color:#2563eb;">
-        <th style="${thStyle}">Pallets</th>
-        <th style="${thStyle}">Especie</th>
-        <th style="${thStyle}">Variedad</th>
-        <th style="${thStyle}">Formato</th>
-        <th style="${thStyle}">Calibre</th>
-        <th style="${thStyle}">Categoría</th>
-        <th style="${thStyle}">Precios ${incotermLabel}</th>
+        <th style="${thPallets}">Pallets</th>
+        <th style="${thEspecie}">Especie</th>
+        <th style="${thVariedad}">Variedad</th>
+        <th style="${thFormato}">Formato</th>
+        <th style="${thCalibre}">Calibre</th>
+        <th style="${thCategoria}">Categoría</th>
+        <th style="${thPrecios}">Precios ${incotermLabel}</th>
       </tr>
     </thead>
     <tbody>
@@ -1873,11 +1936,20 @@ const App = () => {
       openEmailClient(consolidatedSubject);
 
       setShowOrderActionsModal(false);
-      setSearchTerm("");
-      setCommittedSearchTerm("");
       setEmailActionTriggered(false);
       setIsShowingPreview(false);
       setPreviewHtmlContent("");
+      setSearchTerm("");
+      setCommittedSearchTerm("");
+
+      // Reset local UI to blank immediately so the form looks clean.
+      // Do NOT create a new draft here — onSnapshot is the single source of truth
+      // for draft creation. It will detect that the active order is no longer a
+      // draft and create a fresh one automatically.
+      setHeaderInfo({ ...initialHeaderState, emailSubject: generateEmailSubjectValue([], []) });
+      setOrderItems([{ ...initialItemState, id: crypto.randomUUID() }]);
+      setCurrentOrderIndex(0);
+      setActiveOrderId(null);
     } catch (error) {
     }
   };
@@ -2309,7 +2381,7 @@ const App = () => {
           </div>
         )}
 
-        <div className="border-b pb-4 mb-4 pt-16 sm:pt-0">
+        <div className="pb-4 mb-4 pt-16 sm:pt-0">
           <h1 className="text-xl sm:text-2xl font-bold text-center text-gray-800 mb-4">
             Pedidos Comercial Frutam
           </h1>
@@ -2786,12 +2858,13 @@ const App = () => {
                     </tr>
                   ))}
                   <tr style={{ backgroundColor: "#e0e0e0" }}>
-                    <td colSpan="6" style={{ padding: "6px 15px 6px 6px", textAlign: "right", fontWeight: "bold", border: "1px solid #ccc", borderBottomLeftRadius: "8px", marginTop: "15px" }}>
+                    <td colSpan="7" style={{ padding: "6px 15px 6px 6px", textAlign: "right", fontWeight: "bold", border: "1px solid #ccc", borderBottomLeftRadius: "8px", marginTop: "15px" }}>
                       Total de Pallets:
                     </td>
-                    <td colSpan="1" style={{ padding: "6px", fontWeight: "bold", border: "1px solid #ccc", borderBottomRightRadius: "8px", textAlign: "center" }}>
+                    <td colSpan="1" style={{ padding: "6px", fontWeight: "bold", border: "1px solid #ccc", textAlign: "center" }}>
                       {currentOrderTotalPallets} Pallets
                     </td>
+                    <td style={{ backgroundColor: "#e0e0e0", border: "none" }}></td>
                   </tr>
                 </tbody>
               </table>
@@ -3278,7 +3351,7 @@ const App = () => {
         whiteSpace: "nowrap",
         zIndex: 10,
       }}>
-        v13 · 03 Mar 2026
+        v15 · 03 Mar 2026
       </div>
     </div>
   );

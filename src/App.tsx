@@ -45,8 +45,6 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-console.log("Firebase Init: App initialized.");
-console.log("Firebase Init: Config used:", firebaseConfig);
 
 // Component for rendering a single input field with styling
 const InputField = React.forwardRef(
@@ -144,7 +142,6 @@ const App = () => {
   // Using projectId as appId for the Firestore collection path, prioritizing __app_id
   const appId =
     typeof __app_id !== "undefined" ? __app_id : firebaseConfig.projectId;
-  console.log("App Init: Using appId:", appId);
 
   const [userId, setUserId] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(false); // To know when authentication is ready
@@ -200,7 +197,6 @@ const App = () => {
   const saveEmailClientPref = (pref) => {
     localStorage.setItem(EMAIL_CLIENT_KEY, pref);
     setEmailClientPref(pref);
-    console.log("Config: Email client preference saved:", pref);
   };
 
   const openEmailClient = (subject) => {
@@ -235,14 +231,12 @@ const App = () => {
       window.removeEventListener("blur", onBlur);
       if (desktopOpened) {
         try { fallbackTab?.close(); } catch (_) {}
-        console.log("Email: Desktop client opened (mailto: handled by OS).");
       } else {
         try {
           if (fallbackTab && !fallbackTab.closed) {
             fallbackTab.location.href = outlookWebUrl;
           }
         } catch (_) {}
-        console.log("Email: No desktop handler found, opened Outlook Web.");
       }
     }, 600);
   };
@@ -251,7 +245,6 @@ const App = () => {
     const record = { mailId, subject, html, timestamp: Date.now(), confirmed: false };
     localStorage.setItem(LAST_SEND_KEY, JSON.stringify(record));
     setLastSendData(record);
-    console.log("LastSend: Saved to localStorage. Mail ID:", mailId);
   };
 
   const confirmLastSend = () => {
@@ -264,7 +257,6 @@ const App = () => {
       }
     } catch { /* ignore */ }
     setLastSendData(null);
-    console.log("LastSend: Confirmed by user.");
   };
 
   const recoverLastSend = async () => {
@@ -272,7 +264,6 @@ const App = () => {
     await copyFormattedContentToClipboard(lastSendData.html);
     openEmailClient(lastSendData.subject);
     setShowRecoveryModal(false);
-    console.log("LastSend: Recovered and re-copied. Mail ID:", lastSendData.mailId);
   };
 
   // ─── DERIVED: last 3 sent Mail IDs for the current user ─────────────────────
@@ -350,9 +341,7 @@ const App = () => {
       saveLastSend(mailId, consolidatedSubject, fullEmailBodyHtml);
 
       openEmailClient(consolidatedSubject);
-      console.log("History: Re-generated and re-sent Mail ID:", mailId);
     } catch (err) {
-      console.error("History: Error re-sending:", err);
     } finally {
       setHistoryResendingId(null);
     }
@@ -376,50 +365,25 @@ const App = () => {
       try {
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
           if (user) {
-            const STORAGE_KEY = "frutam_uid";
-            let stableUid = localStorage.getItem(STORAGE_KEY);
-            if (!stableUid) {
-              stableUid = user.uid;
-              localStorage.setItem(STORAGE_KEY, stableUid);
-              console.log("Firebase Auth: First visit — persisted new UID to localStorage:", stableUid);
-            } else {
-              console.log("Firebase Auth: Returning visit — reusing persisted UID:", stableUid);
-            }
-            setUserId(stableUid);
+            // Always use the real Firebase Auth UID — never localStorage.
+            // localStorage caused desync: the stored UID could differ from
+            // request.auth.uid in Security Rules, causing permission errors.
+            setUserId(user.uid);
             setIsAuthReady(true);
-            console.log(
-              "Firebase Auth: User authenticated. Stable UID in use:",
-              stableUid
-            );
           } else {
-            console.log(
-              "Firebase Auth: No user detected, attempting anonymous sign-in."
-            );
             try {
               if (
                 typeof __initial_auth_token !== "undefined" &&
                 __initial_auth_token
               ) {
                 await signInWithCustomToken(auth, __initial_auth_token);
-                console.log("Firebase Auth: Signed in with custom token.");
               } else {
                 await signInAnonymously(auth);
-                console.log("Firebase Auth: Signed in anonymously.");
               }
-              const STORAGE_KEY = "frutam_uid";
-              let stableUid = localStorage.getItem(STORAGE_KEY);
-              if (!stableUid && auth.currentUser?.uid) {
-                stableUid = auth.currentUser.uid;
-                localStorage.setItem(STORAGE_KEY, stableUid);
-                console.log("Firebase Auth: Fallback — persisted new UID:", stableUid);
-              }
-              setUserId(stableUid || auth.currentUser?.uid);
+              // auth.currentUser is set synchronously after signIn
+              setUserId(auth.currentUser?.uid ?? null);
             } catch (anonError) {
-              console.error(
-                "Firebase Auth: Error attempting sign-in (fallback or token):",
-                anonError
-              );
-              setUserId(crypto.randomUUID());
+              setUserId(null);
             } finally {
               setIsAuthReady(true);
             }
@@ -428,10 +392,6 @@ const App = () => {
 
         return () => unsubscribe();
       } catch (error) {
-        console.error(
-          "Firebase Auth: Error initializing Firebase Auth:",
-          error
-        );
         setIsAuthReady(true);
       }
     };
@@ -579,6 +539,17 @@ const App = () => {
   const headerInputRefs = useRef({});
   const tableInputRefs = useRef({});
   const isUserEditing = useRef(false);
+  const pendingSaveTimeout = useRef(null);
+  // Stable ref so the keyboard handler always sees current orderItems
+  // without needing to be re-registered on every state change.
+  const orderItemsRef = useRef([]);
+  // Mirror into ref every render so the keyboard handler always has fresh data
+  orderItemsRef.current = orderItems;
+  // Stable ref so the Firestore listener snapshot callback can read the current
+  // activeOrderId without needing it as a dependency (which would cause the
+  // listener to re-subscribe on every order change, creating an infinite loop).
+  const activeOrderIdRef = useRef(null);
+  activeOrderIdRef.current = activeOrderId;
 
   const headerInputOrder = [
     "reDestinatarios",
@@ -599,11 +570,7 @@ const App = () => {
   ];
 
   const saveOrderToFirestore = async (orderToSave) => {
-    console.log("Firestore: saveOrderToFirestore called.");
     if (!db || !userId) {
-      console.warn(
-        "Firestore: Not initialized or user not authenticated. Cannot save order."
-      );
       return;
     }
     try {
@@ -614,12 +581,6 @@ const App = () => {
       const { header, items } = orderToSave;
 
       const orderDocId = orderToSave.id || doc(ordersCollectionRef).id;
-      console.log(
-        "Firestore: Saving order with ID:",
-        orderDocId,
-        "Data passed:",
-        orderToSave
-      );
 
       const dataToSave = {
         header: {
@@ -630,26 +591,16 @@ const App = () => {
         items: JSON.stringify(items),
       };
 
-      console.log("Firestore: Data to be saved:", dataToSave);
 
       const orderDocRef = doc(ordersCollectionRef, orderDocId);
       await setDoc(orderDocRef, dataToSave);
-      console.log("Firestore: Order saved/updated successfully:", orderDocId);
     } catch (error) {
-      console.error("Firestore: Error saving/updating order:", error);
       throw error;
     }
   };
 
   const handleSoftDeleteOrderInFirestore = async (orderDocIdToDelete) => {
-    console.log(
-      "Firestore: handleSoftDeleteOrderInFirestore called for ID:",
-      orderDocIdToDelete
-    );
     if (!db || !userId) {
-      console.warn(
-        "Firestore: Not initialized or user not authenticated. Cannot soft delete order."
-      );
       return;
     }
     try {
@@ -658,21 +609,12 @@ const App = () => {
         `artifacts/${appId}/public/data/pedidos`,
         orderDocIdToDelete
       );
-      console.log(
-        "Firestore: Attempting to mark document as 'deleted':",
-        orderDocIdToDelete
-      );
       await updateDoc(orderDocRef, {
         "header.status": "deleted",
         "header.lastModifiedBy": userId,
         "header.updatedAt": Date.now(),
       });
-      console.log(
-        "Firestore: Document marked as 'deleted' successfully for ID:",
-        orderDocIdToDelete
-      );
     } catch (error) {
-      console.error("Firestore: Error marking order as deleted:", error);
     }
   };
 
@@ -690,9 +632,7 @@ const App = () => {
         openedAt: Date.now(),
         expiresAt: Date.now() + 5 * 60 * 1000,
       });
-      console.log("Presence: Written for mailId:", mailId, "userId:", userId);
     } catch (error) {
-      console.error("Presence: Error writing presence:", error);
     }
   };
 
@@ -704,9 +644,7 @@ const App = () => {
         `artifacts/${appId}/public/data/presence/${mailId}/users/${userId}`
       );
       await deleteDoc(presenceRef);
-      console.log("Presence: Cleared for mailId:", mailId, "userId:", userId);
     } catch (error) {
-      console.error("Presence: Error clearing presence:", error);
     }
   };
 
@@ -734,7 +672,6 @@ const App = () => {
         .map((p) => p.userId.substring(0, 8).toUpperCase());
 
       setOtherUsersPresent(others);
-      console.log("Presence: Other users present:", others);
     });
 
     presenceUnsubscribeRef.current = unsubscribe;
@@ -755,7 +692,6 @@ const App = () => {
         .map((p) => p.userId.substring(0, 8).toUpperCase());
       return others;
     } catch (error) {
-      console.error("Presence: Error checking conflict:", error);
       return [];
     }
   };
@@ -764,7 +700,6 @@ const App = () => {
     if (!presenceMailId) return;
     const interval = setInterval(() => {
       writePresence(presenceMailId);
-      console.log("Presence: Heartbeat refreshed for mailId:", presenceMailId);
     }, 2 * 60 * 1000);
     return () => clearInterval(interval);
   }, [presenceMailId]);
@@ -792,12 +727,6 @@ const App = () => {
     );
 
     if (newSubjectForCurrentOrder !== headerInfo.emailSubject) {
-      console.log(
-        "Subject Effect: Updating email subject from",
-        headerInfo.emailSubject,
-        "to",
-        newSubjectForCurrentOrder
-      );
       setHeaderInfo((prevInfo) => ({
         ...prevInfo,
         emailSubject: newSubjectForCurrentOrder,
@@ -812,9 +741,6 @@ const App = () => {
 
   useEffect(() => {
     if (!db || !userId || !isAuthReady) {
-      console.log(
-        "Firestore Listener: Firestore, userId, or auth not ready for data fetching."
-      );
       return;
     }
 
@@ -823,20 +749,19 @@ const App = () => {
       db,
       `artifacts/${appId}/public/data/pedidos`
     );
-    console.log(
-      "Firestore Listener: Setting up snapshot listener for collection:",
-      `artifacts/${appId}/public/data/pedidos`
-    );
 
-    const q = query(ordersCollectionRef);
+    // Normal mode: filter server-side to only fetch the current user's orders.
+    // Requires the composite index on header.createdBy + header.createdAt
+    // declared in firestore.indexes.json.
+    // Search mode: fetch the full collection so cross-user mailId lookups work.
+    const q = committedSearchTerm
+      ? query(ordersCollectionRef)
+      : query(ordersCollectionRef, where("header.createdBy", "==", userId));
+
 
     const unsubscribe = onSnapshot(
       q,
       async (snapshot) => {
-        console.log(
-          "Firestore Listener: Snapshot received. Number of docs:",
-          snapshot.docs.length
-        );
         let fetchedOrders = snapshot.docs.map((doc) => {
           const data = doc.data();
           let parsedItems = [];
@@ -845,22 +770,11 @@ const App = () => {
             if (typeof data.items === "string") {
               try {
                 parsedItems = JSON.parse(data.items);
-                console.log(
-                  `Firestore Listener: Parsed items for doc ${doc.id}.`
-                );
               } catch (e) {
-                console.error(
-                  `Firestore Listener: Error parsing items for doc ${doc.id}:`,
-                  e,
-                  `Raw data.items: "${data.items}"`
-                );
                 parsedItems = [];
               }
             } else if (Array.isArray(data.items)) {
               parsedItems = data.items;
-              console.log(
-                `Firestore Listener: Items for doc ${doc.id} already an array.`
-              );
             }
           }
 
@@ -884,15 +798,6 @@ const App = () => {
           return dateA - dateB;
         });
 
-        console.log(
-          "Firestore Listener: All orders fetched from Firestore (including sent) and sorted:",
-          fetchedOrders.map((o) => ({
-            id: o.id,
-            mailId: o.header?.mailId,
-            status: o.header?.status,
-            createdAt: o.header?.createdAt,
-          }))
-        );
         setAllOrdersFromFirestore(fetchedOrders);
         setIsLoading(false);
 
@@ -905,11 +810,8 @@ const App = () => {
         if (
           draftOrders.length === 0 &&
           !committedSearchTerm &&
-          activeOrderId === null
+          activeOrderIdRef.current === null
         ) {
-          console.log(
-            "Firestore Listener: No draft orders found after fetch. Creating new initial order."
-          );
           const newOrderDocRef = doc(ordersCollectionRef);
           const newOrderId = newOrderDocRef.id;
           const newBlankHeader = {
@@ -931,87 +833,42 @@ const App = () => {
               items: newBlankItems,
             });
             setActiveOrderId(newOrderId);
-            console.log(
-              "Firestore Listener: New order created and set as active:",
-              newOrderId
-            );
           } catch (saveError) {
-            console.error(
-              "Firestore Listener: ERROR: Failed to create initial draft order:",
-              saveError
-            );
             setIsLoading(false);
           }
         } else if (
           draftOrders.length > 0 &&
-          activeOrderId === null &&
+          activeOrderIdRef.current === null &&
           !committedSearchTerm
         ) {
           setActiveOrderId(draftOrders[0].id);
-          console.log(
-            "Firestore Listener: Draft orders found, setting first (oldest) draft as active:",
-            draftOrders[0].id
-          );
         }
       },
       (error) => {
-        console.error(
-          "Firestore Listener: Error fetching orders from Firestore:",
-          error
-        );
         setIsLoading(false);
       }
     );
 
     return () => unsubscribe();
-  }, [db, userId, isAuthReady, appId, committedSearchTerm, activeOrderId]);
+  }, [db, userId, isAuthReady, appId, committedSearchTerm]);
 
   useEffect(() => {
     let filtered = [];
-    console.log(
-      "Filter Effect: Effect filter by committedSearchTerm triggered. committedSearchTerm:",
-      committedSearchTerm,
-      "Current activeOrderId before update:",
-      activeOrderId
-    );
-    console.log(
-      "Filter Effect: allOrdersFromFirestore at filter time:",
-      allOrdersFromFirestore.map((o) => ({
-        id: o.id,
-        status: o.header?.status || "N/A",
-        createdAt: o.header?.createdAt,
-      }))
-    );
 
     if (committedSearchTerm) {
-      console.log(
-        "Filter Effect: Search active. Filtering for Mail ID and not deleted."
-      );
       filtered = allOrdersFromFirestore.filter((order) => {
         const mailIdMatch = (order.header?.mailId || "")
           .toLowerCase()
           .includes(committedSearchTerm.toLowerCase());
         const isNotDeleted = order.header?.status !== "deleted";
-        console.log(
-          `Filter Effect - Search Check: Order ID ${order.id}, Mail ID "${order.header?.mailId}", Status "${order.header?.status}", matches search: ${mailIdMatch}, not deleted: ${isNotDeleted}`
-        );
         return mailIdMatch && isNotDeleted;
       });
     } else {
-      console.log(
-        "Filter Effect: No search term. Filtering for 'draft' status belonging to current user only."
-      );
       filtered = allOrdersFromFirestore.filter((order) => {
         const isDraft = order.header?.status === "draft";
         const isOwner = order.header?.createdBy === userId;
-        console.log(
-          `Filter Effect - Draft Check: Order ID ${order.id}, Status "${order.header?.status}", createdBy "${order.header?.createdBy}", isDraft: ${isDraft}, isOwner: ${isOwner}`
-        );
         return isDraft && isOwner;
       });
-      console.log(
-        "Filter Effect: No search term, displaying only current user's draft orders."
-      );
     }
 
     filtered.sort((a, b) => {
@@ -1020,15 +877,6 @@ const App = () => {
       return dateA - dateB;
     });
 
-    console.log(
-      "Filter Effect: displayedOrders after filter and sort:",
-      filtered.length,
-      filtered.map((o) => ({
-        id: o.id,
-        createdAt: o.header?.createdAt,
-        status: o.header?.status,
-      }))
-    );
     setDisplayedOrders(filtered);
 
     let newActiveOrderIdCandidate = null;
@@ -1039,21 +887,10 @@ const App = () => {
       );
       if (currentActiveInFiltered) {
         newActiveOrderIdCandidate = activeOrderId;
-        console.log(
-          "Filter Effect: Search active. Keeping current activeOrderId:",
-          newActiveOrderIdCandidate
-        );
       } else if (filtered.length > 0) {
         newActiveOrderIdCandidate = filtered[filtered.length - 1].id;
-        console.log(
-          "Filter Effect: Search active. Current active not in results. Setting to LAST (newest) filtered:",
-          newActiveOrderIdCandidate
-        );
       } else {
         newActiveOrderIdCandidate = null;
-        console.log(
-          "Filter Effect: Search active. No results found. Setting activeOrderId to null."
-        );
       }
     } else {
       const currentActiveInDrafts = filtered.find(
@@ -1061,32 +898,15 @@ const App = () => {
       );
       if (currentActiveInDrafts) {
         newActiveOrderIdCandidate = activeOrderId;
-        console.log(
-          "Filter Effect: No search. Keeping current activeOrderId (draft):",
-          newActiveOrderIdCandidate
-        );
       } else if (filtered.length > 0) {
         newActiveOrderIdCandidate = filtered[filtered.length - 1].id;
-        console.log(
-          "Filter Effect: No search. Current active not in drafts. Setting to LAST (newest) draft:",
-          newActiveOrderIdCandidate
-        );
       } else {
         newActiveOrderIdCandidate = null;
-        console.log(
-          "Filter Effect: No search. No drafts found. Setting activeOrderId to null."
-        );
       }
     }
 
     if (newActiveOrderIdCandidate !== activeOrderId) {
       setActiveOrderId(newActiveOrderIdCandidate);
-      console.log(
-        "Filter Effect: activeOrderId changed from",
-        activeOrderId,
-        "to",
-        newActiveOrderIdCandidate
-      );
     } else if (
       newActiveOrderIdCandidate &&
       newActiveOrderIdCandidate === activeOrderId
@@ -1096,70 +916,36 @@ const App = () => {
       );
       if (newIndex !== -1 && newIndex !== currentOrderIndex) {
         setCurrentOrderIndex(newIndex);
-        console.log(
-          "Filter Effect: currentOrderIndex updated due to order sorting (activeOrderId unchanged):",
-          newIndex
-        );
       }
     }
   }, [allOrdersFromFirestore, committedSearchTerm, activeOrderId]);
 
   useEffect(() => {
-    console.log(
-      "UI Sync Effect: Triggered. displayedOrders.length:",
-      displayedOrders.length,
-      "activeOrderId:",
-      activeOrderId
-    );
 
     if (activeOrderId && displayedOrders.length > 0) {
       const orderToDisplay = displayedOrders.find(
         (order) => order.id === activeOrderId
       );
       if (orderToDisplay) {
-        console.log(
-          "UI Sync Effect: Syncing UI with order ID:",
-          orderToDisplay.id,
-          "Status:",
-          orderToDisplay.header.status,
-          "Mail ID:",
-          orderToDisplay.header.mailId
-        );
         if (!isUserEditing.current) {
           setHeaderInfo(orderToDisplay.header);
           setOrderItems(orderToDisplay.items);
         } else {
-          console.log(
-            "UI Sync Effect: User is editing, skipping UI update from Firebase to avoid overwriting in-progress changes."
-          );
         }
         const foundIndex = displayedOrders.findIndex(
           (order) => order.id === activeOrderId
         );
         if (foundIndex !== -1 && foundIndex !== currentOrderIndex) {
           setCurrentOrderIndex(foundIndex);
-          console.log("UI Sync Effect: New currentOrderIndex:", foundIndex);
         }
       } else {
-        console.log(
-          "UI Sync Effect: Active order (",
-          activeOrderId,
-          ") not found in displayedOrders. Waiting for data synchronization. Current UI state maintained."
-        );
       }
     }
     else if (!activeOrderId && displayedOrders.length > 0) {
       const firstDraftOrder = displayedOrders[0];
       if (firstDraftOrder) {
         setActiveOrderId(firstDraftOrder.id);
-        console.log(
-          "UI Sync Effect: No activeOrderId, defaulting to first draft:",
-          firstDraftOrder.id
-        );
       } else {
-        console.warn(
-          "UI Sync Effect: Unexpected state: activeOrderId is null but displayedOrders is not empty and no first draft found."
-        );
         setHeaderInfo({
           ...initialHeaderState,
           emailSubject: generateEmailSubjectValue([], []),
@@ -1169,9 +955,6 @@ const App = () => {
       }
     }
     else if (!activeOrderId && displayedOrders.length === 0) {
-      console.log(
-        "UI Sync Effect: No active order and no displayed orders. Resetting UI to a blank form."
-      );
       setHeaderInfo({
         ...initialHeaderState,
         emailSubject: generateEmailSubjectValue([], []),
@@ -1180,26 +963,15 @@ const App = () => {
       setCurrentOrderIndex(0);
     }
     else if (activeOrderId && displayedOrders.length === 0) {
-      console.warn(
-        "UI Sync Effect: Stale activeOrderId detected. Clearing activeOrderId:",
-        activeOrderId
-      );
       setActiveOrderId(null);
     }
   }, [activeOrderId, displayedOrders]);
 
   const saveCurrentFormDataToDisplayed = async () => {
-    console.log("Save Handler: saveCurrentFormDataToDisplayed called.");
     if (!db || !userId) {
-      console.warn(
-        "Save Handler: Firestore not initialized or user not authenticated. Cannot save order."
-      );
       return;
     }
     if (!activeOrderId) {
-      console.log(
-        "Save Handler: saveCurrentFormDataToDisplayed called without activeOrderId. Skipping save for current form state."
-      );
       return;
     }
 
@@ -1208,21 +980,11 @@ const App = () => {
       header: { ...headerInfo },
       items: orderItems.map((item) => ({ ...item })),
     };
-    console.log(
-      "Save Handler: Attempting to save current order data for ID:",
-      currentOrderData.id,
-      "Mail ID:",
-      currentOrderData.header.mailId,
-      "Status:",
-      currentOrderData.header.status
-    );
     await saveOrderToFirestore(currentOrderData);
-    console.log("Save Handler: saveCurrentFormDataToDisplayed finished.");
   };
 
   const handleHeaderChange = (e) => {
     const { name, value } = e.target;
-    console.log(`Header Change: Field '${name}' changed to '${value}'.`);
     setHeaderInfo((prevInfo) => ({ ...prevInfo, [name]: value }));
   };
 
@@ -1234,9 +996,6 @@ const App = () => {
       name !== "emailSubject" &&
       name !== "mailId"
     ) {
-      console.log(
-        `Header Blur: Field '${name}' blurred. Value '${value}' capitalized.`
-      );
       setHeaderInfo((prevInfo) => ({
         ...prevInfo,
         [name]: value.toUpperCase(),
@@ -1246,20 +1005,38 @@ const App = () => {
 
   const handleFocusField = () => {
     isUserEditing.current = true;
-    console.log("Focus: isUserEditing set to TRUE.");
+    // Cancel any pending save-and-release so focus restores protection
+    if (pendingSaveTimeout.current) {
+      clearTimeout(pendingSaveTimeout.current);
+      pendingSaveTimeout.current = null;
+    }
   };
 
   const handleBlurField = (originalBlurFn) => (e) => {
-    isUserEditing.current = false;
-    console.log("Blur: isUserEditing set to FALSE.");
+    // Run the original blur handler first (e.g. capitalize)
     if (originalBlurFn) originalBlurFn(e);
+
+    // Schedule a save-and-release after a short delay.
+    // The delay lets React batch the state update from the blur handler
+    // before we snapshot headerInfo/orderItems for saving.
+    // If focus moves to another field, handleFocusField will cancel
+    // this timeout, keeping the guard active the whole time the user
+    // is inside the form.
+    if (pendingSaveTimeout.current) {
+      clearTimeout(pendingSaveTimeout.current);
+    }
+    pendingSaveTimeout.current = setTimeout(async () => {
+      pendingSaveTimeout.current = null;
+      // Save to Firestore while isUserEditing is still true so no
+      // concurrent snapshot can overwrite while we are mid-flight.
+      await saveCurrentFormDataToDisplayed();
+      // Only release the guard AFTER the save is committed.
+      isUserEditing.current = false;
+    }, 300);
   };
 
   const handleItemChange = (itemId, e) => {
     const { name, value } = e.target;
-    console.log(
-      `Item Change: Item ID '${itemId}', Field '${name}' changed to '${value}'.`
-    );
     setOrderItems((prevItems) => {
       const updatedItems = prevItems.map((item) =>
         item.id === itemId
@@ -1275,9 +1052,6 @@ const App = () => {
 
   const handleItemBlur = (itemId, e) => {
     const { name, value, type } = e.target;
-    console.log(
-      `Item Blur: Item ID '${itemId}', Field '${name}' blurred. Original value: '${value}'.`
-    );
 
     setOrderItems((prevItems) => {
       const updatedItems = prevItems.map((item) => {
@@ -1303,14 +1077,12 @@ const App = () => {
             } else {
               newValue = "";
             }
-            console.log(`Item Blur: PreciosFOB formatted to '${newValue}'.`);
           } else if (name === "calibre") {
             const parts = value
               .split(/[,;\s-]+/)
               .filter((part) => part.trim() !== "")
               .map((part) => part.trim().toUpperCase());
             newValue = parts.join(" - ");
-            console.log(`Item Blur: Calibre formatted to '${newValue}'.`);
           } else if (name === "categoria") {
             const matches = value.match(/[a-zA-Z0-9]+/g);
             if (matches && matches.length > 0) {
@@ -1319,13 +1091,9 @@ const App = () => {
               newValue = "";
             }
             newValue = newValue.toUpperCase();
-            console.log(`Item Blur: Categoria formatted to '${newValue}'.`);
           }
           else if (type !== "number") {
             newValue = value.toUpperCase();
-            console.log(
-              `Item Blur: Other text field capitalized to '${newValue}'.`
-            );
           }
           return { ...item, [name]: newValue };
         }
@@ -1336,7 +1104,6 @@ const App = () => {
   };
 
   const handleAddItem = (sourceItemId = null) => {
-    console.log("Add Item: handleAddItem called. Source ID:", sourceItemId);
     setOrderItems((prevItems) => {
       let updatedItems;
       if (sourceItemId) {
@@ -1353,7 +1120,6 @@ const App = () => {
             newItem,
             ...prevItems.slice(index + 1),
           ];
-          console.log("Add Item: Duplicated item. New item ID:", newItem.id);
         } else {
           updatedItems = [
             ...prevItems,
@@ -1370,7 +1136,6 @@ const App = () => {
               isCanceled: false,
             },
           ];
-          console.log("Add Item: Source item not found, adding empty row.");
         }
       } else {
         updatedItems = [
@@ -1388,23 +1153,19 @@ const App = () => {
             isCanceled: false,
           },
         ];
-        console.log("Add Item: Adding empty row.");
       }
       saveOrderToFirestore({
         id: activeOrderId,
         header: { ...headerInfo },
         items: updatedItems,
       });
-      console.log("Add Item: Triggering save to Firestore.");
       return updatedItems;
     });
   };
 
   const handleDeleteItem = (idToDelete) => {
-    console.log("Delete Item: handleDeleteItem called for ID:", idToDelete);
     setOrderItems((prevItems) => {
       if (prevItems.length <= 1) {
-        console.log("Delete Item: Cannot delete the last row.");
         return prevItems;
       }
       const updatedItems = prevItems.filter((item) => item.id !== idToDelete);
@@ -1413,20 +1174,15 @@ const App = () => {
         header: { ...headerInfo },
         items: updatedItems,
       });
-      console.log("Delete Item: Triggering save to Firestore after deletion.");
       return updatedItems;
     });
   };
 
   const toggleItemCancellation = (itemId) => {
-    console.log("Toggle Cancellation: Called for item ID:", itemId);
     setOrderItems((prevItems) => {
       const updatedItems = prevItems.map((item) => {
         if (item.id === itemId) {
           const newIsCanceled = !item.isCanceled;
-          console.log(
-            `Toggle Cancellation: Item ${itemId} isCanceled changed to ${newIsCanceled}.`
-          );
           return {
             ...item,
             isCanceled: newIsCanceled,
@@ -1440,7 +1196,6 @@ const App = () => {
         header: { ...headerInfo },
         items: updatedItems,
       });
-      console.log("Toggle Cancellation: Triggering save to Firestore.");
       return updatedItems;
     });
   };
@@ -1480,10 +1235,6 @@ const App = () => {
     try {
       const date = new Date(dateString + "T00:00:00");
       if (isNaN(date.getTime())) {
-        console.warn(
-          "Date Format: Invalid date string received by formatDateToSpanish:",
-          dateString
-        );
         return dateString;
       }
       const dayOfWeek = daysOfWeek[date.getDay()];
@@ -1492,7 +1243,6 @@ const App = () => {
       const year = date.getFullYear();
       return `${dayOfWeek} ${dayOfMonth} de ${month} de ${year}`;
     } catch (e) {
-      console.error("Date Format: Error formatting date:", dateString, e);
       return dateString;
     }
   };
@@ -1530,105 +1280,148 @@ const App = () => {
   //   • No overflow:hidden wrappers (Outlook Desktop clips content inside them)
   //   • All colors are 6-digit hex (Outlook 2016 ignores rgba/hsl)
   // ─────────────────────────────────────────────────────────────────────────────
+  // Escape user-supplied strings before inserting them into HTML templates.
+  // This prevents stored XSS if a user types HTML/script tags in a field.
+  const escapeHtml = (str) => {
+    if (str === null || str === undefined) return "";
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  };
+
   const generateSingleOrderHtml = (
-  orderHeader,
-  orderItemsData,
-  orderNumber
-) => {
-  const nonCancelledItems = orderItemsData.filter((item) => !item.isCanceled);
-  const singleOrderTotalPallets = nonCancelledItems.reduce((sum, item) => {
-    const pallets = parseFloat(item.pallets) || 0;
-    return sum + pallets;
-  }, 0);
+    orderHeader,
+    orderItemsData,
+    orderNumber
+  ) => {
+    const nonCancelledItems = orderItemsData.filter((item) => !item.isCanceled);
+    const singleOrderTotalPallets = nonCancelledItems.reduce((sum, item) => {
+      const pallets = parseFloat(item.pallets) || 0;
+      return sum + pallets;
+    }, 0);
 
-  const consolidatedObservationsText = orderItemsData
-    .map((item) => item.estado)
-    .filter((obs) => obs && obs.trim() !== "" && obs.toUpperCase() !== "CANCELADO")
-    .join(" – ");
-
-  const incotermLabel = orderHeader.incoterm || "FOB";
-  const orderBlockExtra = orderHeader.status === "deleted" ? "opacity:0.6;text-decoration:line-through;" : "";
-
-  // ── Estilos de Celda ─────────────────────────────────────────────────────
-  const thStyle =
-    "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#ffffff;" +
-    "background-color:#2563eb;padding:8px 12px;border:1px solid #1e40af;" +
-    "text-align:center;white-space:nowrap;vertical-align:middle;";
-
-  const tdBase =
-    "font-family:Arial,sans-serif;font-size:11px;color:#333333;" +
-    "padding:8px 12px;text-align:center;vertical-align:middle;" +
-    "border:1px solid #dddddd;white-space:nowrap;";
-
-  const dataRowsHtml = orderItemsData
-    .map((item, idx) => {
-      const rowBg = idx % 2 === 0 ? "#f9f9f9" : "#ffffff";
-      const cancelExtra = item.isCanceled ? "color:#ef4444;text-decoration:line-through;" : "";
-      const td = tdBase + `background-color:${rowBg};` + cancelExtra;
-      return (
-        `<tr style="background-color:${rowBg};">` +
-        `<td style="${td}">${item.pallets    || ""}</td>` +
-        `<td style="${td}">${item.especie    || ""}</td>` +
-        `<td style="${td}">${item.variedad   || ""}</td>` +
-        `<td style="${td}">${item.formato    || ""}</td>` +
-        `<td style="${td}">${item.calibre    || ""}</td>` +
-        `<td style="${td}">${item.categoria  || ""}</td>` +
-        `<td style="${td}">${item.preciosFOB || ""}</td>` +
-        `</tr>`
+    const allObservations = orderItemsData
+      .map((item) => item.estado)
+      .filter(
+        (obs) => obs && obs.trim() !== "" && obs.toUpperCase() !== "CANCELADO"
       );
-    })
-    .join("");
 
-  // ── HTML output ───────────────────────────────────────────────────────────
-  return `
-<div style="margin-bottom:30px; display:block; ${orderBlockExtra}">
-  <table border="0" cellpadding="0" cellspacing="0" style="background-color:#ffffff; border:1px solid #dddddd; border-radius:8px; border-collapse:separate; width:auto; box-sizing:border-box; margin-bottom:10px;">
-    <tr>
-      <td style="padding:20px; font-family:Arial,sans-serif;">
-        
-        <table border="0" cellpadding="0" cellspacing="0" style="width:100%; margin-bottom:15px;">
-          <tr><td style="padding-bottom:4px; font-family:Arial,sans-serif; font-size:13px; color:#333333; white-space:nowrap;"><strong>País:</strong> ${orderHeader.deNombrePais || ""}</td></tr>
-          <tr><td style="padding-bottom:4px; font-family:Arial,sans-serif; font-size:13px; color:#333333; white-space:nowrap;"><strong>Nave:</strong> ${orderHeader.nave || ""}</td></tr>
-          <tr><td style="padding-bottom:4px; font-family:Arial,sans-serif; font-size:13px; color:#333333; white-space:nowrap;"><strong>Fecha de carga:</strong> ${orderHeader.fechaCarga ? formatDateToSpanish(orderHeader.fechaCarga) : ""}</td></tr>
-          <tr><td style="padding-bottom:0px; font-family:Arial,sans-serif; font-size:13px; color:#333333; white-space:nowrap;"><strong>Exporta:</strong> ${orderHeader.exporta || ""}</td></tr>
-        </table>
+    const consolidatedObservationsText =
+      allObservations.length > 0 ? escapeHtml(allObservations.join(" – ")) : "";
 
-        <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse; width:auto; table-layout:auto;">
-          <thead>
-            <tr style="background-color:#2563eb;">
-              <th style="${thStyle}">Pallets</th>
-              <th style="${thStyle}">Especie</th>
-              <th style="${thStyle}">Variedad</th>
-              <th style="${thStyle}">Formato</th>
-              <th style="${thStyle}">Calibre</th>
-              <th style="${thStyle}">Categoría</th>
-              <th style="${thStyle}">Precios ${incotermLabel}</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${dataRowsHtml}
-            <tr style="background-color:#f0f0f0; font-weight:bold;">
-              <td colspan="6" style="${tdBase} text-align:right; border:1px solid #dddddd; background-color:#f0f0f0;">Total de Pallets:</td>
-              <td style="${tdBase} border:1px solid #dddddd; background-color:#f0f0f0;">${singleOrderTotalPallets} Pallets</td>
-            </tr>
-          </tbody>
-        </table>
+    const formattedNave       = escapeHtml(orderHeader.nave         || "");
+    const formattedPais       = escapeHtml(orderHeader.deNombrePais || "");
+    const formattedFechaCarga = escapeHtml(
+      orderHeader.fechaCarga ? formatDateToSpanish(orderHeader.fechaCarga) : ""
+    );
+    const formattedExporta    = escapeHtml(orderHeader.exporta  || "");
+    const incotermLabel       = escapeHtml(orderHeader.incoterm || "FOB");
 
-        ${consolidatedObservationsText ? `
-        <table border="0" cellpadding="0" cellspacing="0" style="width:100%; margin-top:15px;">
-          <tr>
-            <td style="font-family:Arial,sans-serif; font-size:12px; color:#666666; font-style:italic;">
-              <strong style="font-style:normal; color:#333333;">Observaciones:</strong> ${consolidatedObservationsText}
-            </td>
-          </tr>
-        </table>` : ''}
+    const orderBlockExtra = orderHeader.status === "deleted"
+      ? "opacity:0.6;text-decoration:line-through;"
+      : "";
 
-      </td>
-    </tr>
+    // ── Styles ───────────────────────────────────────────────────────────────
+    // <p> inside the header section
+    const pStyle     = "margin:0;margin-bottom:3px;font-family:Arial,sans-serif;font-size:13px;color:#333333;line-height:1.5;";
+    const pLastStyle = "margin:0;font-family:Arial,sans-serif;font-size:13px;color:#333333;line-height:1.5;";
+
+    // Table <th> — blue header matching the published version
+    const thStyle =
+      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#ffffff;" +
+      "background-color:#2563eb;padding:4px 6px;" +
+      "border-top:1px solid #1e40af;border-bottom:1px solid #1e40af;" +
+      "border-left:1px solid #1e40af;border-right:1px solid #1e40af;" +
+      "text-align:center;white-space:nowrap;vertical-align:middle;";
+
+    // Table <td> base — border matches the card border (#dddddd) so there's no
+    // visual seam between the last column and the card edge
+    const tdBase =
+      "font-family:Arial,sans-serif;font-size:11px;color:#333333;" +
+      "padding:4px 6px;text-align:center;white-space:nowrap;vertical-align:middle;" +
+      "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
+      "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
+
+    // Total row — light gray matching the screenshot
+    const tdTotalLabel =
+      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;" +
+      "background-color:#f0f0f0;padding:5px 12px 5px 6px;text-align:right;" +
+      "white-space:nowrap;vertical-align:middle;" +
+      "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
+      "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
+
+    const tdTotalValue =
+      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;" +
+      "background-color:#f0f0f0;padding:5px 6px;text-align:center;" +
+      "white-space:nowrap;vertical-align:middle;" +
+      "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
+      "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
+
+    // ── Data rows ─────────────────────────────────────────────────────────────
+    const dataRowsHtml = orderItemsData
+      .map((item, idx) => {
+        const rowBg = idx % 2 === 0 ? "#f9f9f9" : "#ffffff";
+        const cancelExtra = item.isCanceled
+          ? "color:#ef4444;text-decoration:line-through;"
+          : "";
+        const td = tdBase + `background-color:${rowBg};` + cancelExtra;
+        return (
+          `<tr style="background-color:${rowBg};">` +
+          `<td style="${td}">${escapeHtml(item.pallets    || "")}</td>` +
+          `<td style="${td}">${escapeHtml(item.especie    || "")}</td>` +
+          `<td style="${td}">${escapeHtml(item.variedad   || "")}</td>` +
+          `<td style="${td}">${escapeHtml(item.formato    || "")}</td>` +
+          `<td style="${td}">${escapeHtml(item.calibre    || "")}</td>` +
+          `<td style="${td}">${escapeHtml(item.categoria  || "")}</td>` +
+          `<td style="${td}">${escapeHtml(item.preciosFOB || "")}</td>` +
+          `</tr>`
+        );
+      })
+      .join("");
+
+    // ── HTML output ───────────────────────────────────────────────────────────
+    // The outer <!--[if mso]> wrapper forces Outlook Desktop to allocate 100% width
+    // for the card div (Outlook ignores max-width on divs without this hint).
+    // Modern clients (Gmail, Apple Mail, Outlook Web) use the div directly.
+    return `
+<!--[if mso]><table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;"><tr><td style="padding:0;"><![endif]-->
+<div style="font-family:Arial,sans-serif;font-size:14px;color:#333333;margin-bottom:20px;background-color:#ffffff;border:1px solid #dddddd;border-radius:8px;padding:15px;width:100%;max-width:900px;text-align:left;box-sizing:border-box;${orderBlockExtra}">
+
+  <div style="padding-bottom:10px;border-bottom:1px solid #eeeeee;margin-bottom:12px;">
+    <p style="${pStyle}"><strong style="font-weight:bold;">País:</strong> ${formattedPais}</p>
+    <p style="${pStyle}"><strong style="font-weight:bold;">Nave:</strong> ${formattedNave}</p>
+    <p style="${pStyle}"><strong style="font-weight:bold;">Fecha de carga:</strong> ${formattedFechaCarga}</p>
+    <p style="${pLastStyle}"><strong style="font-weight:bold;">Exporta:</strong> ${formattedExporta}</p>
+  </div>
+
+  <table cellpadding="0" cellspacing="0" border="0"
+    style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;width:100%;table-layout:fixed;margin-top:8px;">
+    <thead>
+      <tr style="background-color:#2563eb;">
+        <th style="${thStyle}">Pallets</th>
+        <th style="${thStyle}">Especie</th>
+        <th style="${thStyle}">Variedad</th>
+        <th style="${thStyle}">Formato</th>
+        <th style="${thStyle}">Calibre</th>
+        <th style="${thStyle}">Categoría</th>
+        <th style="${thStyle}">Precios ${incotermLabel}</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${dataRowsHtml}
+      <tr style="background-color:#f0f0f0;">
+        <td colspan="6" style="${tdTotalLabel}">Total de Pallets:</td>
+        <td colspan="1" style="${tdTotalValue}">${singleOrderTotalPallets} Pallets</td>
+      </tr>
+    </tbody>
   </table>
 
-  <br style="clear:both;" />
-
+  <p style="margin-top:10px;margin-bottom:0;font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#333333;">
+    Observaciones: <span style="font-weight:normal;font-style:italic;color:#555555;">${consolidatedObservationsText}</span>
+  </p>
 
 </div>
 <!--[if mso]></td></tr></table><![endif]-->`;
@@ -1661,10 +1454,8 @@ const App = () => {
             "text/plain": new Blob([content], { type: "text/plain" }),
           }),
         ]);
-        console.log("Clipboard: HTML written via Clipboard API (modern path).");
         return;
       } catch (err) {
-        console.warn("Clipboard: Clipboard API failed, falling back.", err);
       }
     }
 
@@ -1688,62 +1479,38 @@ const App = () => {
       document.body.removeChild(tempDiv);
 
       if (success) {
-        console.log("Clipboard: HTML copied via execCommand fallback.");
         return;
       }
-      console.warn("Clipboard: execCommand returned false.");
     } catch (err) {
-      console.warn("Clipboard: execCommand failed.", err);
     }
 
     // Strategy 3: Plain-text fallback — at minimum the user gets the raw HTML.
     try {
       await navigator.clipboard.writeText(content);
-      console.warn("Clipboard: Copied as plain text (last resort). Formatting may be lost.");
     } catch (err) {
-      console.error("Clipboard: All copy strategies failed.", err);
     }
   };
 
   const handleAddOrder = async () => {
-    console.log("Action: 'Add Order' button clicked.");
     if (!db || !userId) {
-      console.warn(
-        "Add Order: Firestore not initialized or user not authenticated. Cannot add new order."
-      );
       return;
     }
 
     if (activeOrderId) {
-      console.log(
-        "Add Order: Saving current active order before creating a new one."
-      );
       await saveCurrentFormDataToDisplayed();
     }
 
     let mailIdToAssignForNewOrder = "";
     if (committedSearchTerm) {
       mailIdToAssignForNewOrder = committedSearchTerm;
-      console.log(
-        "Add Order: Inheriting Mail ID from committed search term:",
-        mailIdToAssignForNewOrder
-      );
     } else {
       if (headerInfo.mailId && headerInfo.status === "draft") {
         mailIdToAssignForNewOrder = headerInfo.mailId;
-        console.log(
-          "Add Order: Inheriting Mail ID from current draft:",
-          mailIdToAssignForNewOrder
-        );
       } else {
         mailIdToAssignForNewOrder = crypto
           .randomUUID()
           .substring(0, 8)
           .toUpperCase();
-        console.log(
-          "Add Order: Generating new Mail ID for fresh order:",
-          mailIdToAssignForNewOrder
-        );
       }
     }
 
@@ -1770,12 +1537,6 @@ const App = () => {
     };
     const newBlankItems = [{ ...initialItemState, id: crypto.randomUUID() }];
 
-    console.log(
-      "Add Order: Creating new order with ID:",
-      newOrderId,
-      "and Mail ID:",
-      mailIdToAssignForNewOrder
-    );
     await saveOrderToFirestore({
       id: newOrderId,
       header: newBlankHeader,
@@ -1783,24 +1544,19 @@ const App = () => {
     });
 
     setActiveOrderId(newOrderId);
-    console.log(
-      "Add Order: New order added, setting activeOrderId to new order:",
-      newOrderId
-    );
   };
 
   const handlePreviousOrder = () => {
-    console.log("Navigation: handlePreviousOrder called. Before navigation:", {
-      currentOrderIndex,
-      activeOrderId,
-      displayedOrdersLength: displayedOrders.length,
-    });
 
     if (currentOrderIndex === 0) {
-      console.log("Navigation: Already at the first (oldest) order.");
       return;
     }
 
+    // Cancel any pending blur-triggered save; navigation save covers it
+    if (pendingSaveTimeout.current) {
+      clearTimeout(pendingSaveTimeout.current);
+      pendingSaveTimeout.current = null;
+    }
     isUserEditing.current = false;
 
     saveCurrentFormDataToDisplayed();
@@ -1809,30 +1565,21 @@ const App = () => {
     if (displayedOrders[newIndex]) {
       const nextActiveId = displayedOrders[newIndex].id;
       setActiveOrderId(nextActiveId);
-      console.log(
-        "Navigation: Navigating to previous (older) order. New activeOrderId:",
-        nextActiveId
-      );
     } else {
-      console.warn(
-        "Navigation: Could not find previous order at index:",
-        newIndex
-      );
     }
   };
 
   const handleNextOrder = () => {
-    console.log("Navigation: handleNextOrder called. Before navigation:", {
-      currentOrderIndex,
-      activeOrderId,
-      displayedOrdersLength: displayedOrders.length,
-    });
 
     if (currentOrderIndex === displayedOrders.length - 1) {
-      console.log("Navigation: Already at the last (newest) order.");
       return;
     }
 
+    // Cancel any pending blur-triggered save; navigation save covers it
+    if (pendingSaveTimeout.current) {
+      clearTimeout(pendingSaveTimeout.current);
+      pendingSaveTimeout.current = null;
+    }
     isUserEditing.current = false;
 
     saveCurrentFormDataToDisplayed();
@@ -1841,60 +1588,28 @@ const App = () => {
     if (displayedOrders[newIndex]) {
       const nextActiveId = displayedOrders[newIndex].id;
       setActiveOrderId(nextActiveId);
-      console.log(
-        "Navigation: Navigating to next (newer) order. New activeOrderId:",
-        nextActiveId
-      );
     } else {
-      console.warn("Navigation: Could not find next order at index:", newIndex);
     }
   };
 
   const handleDeleteCurrentOrder = async () => {
-    console.log("Action: 'Delete Current Order' button clicked (soft delete).");
     try {
       await saveCurrentFormDataToDisplayed();
 
       if (displayedOrders.length <= 1) {
-        console.log("Delete Order: Cannot delete the last order.");
         return;
       }
 
-      console.log(
-        "Delete Order: Passed initial check. displayedOrders.length:",
-        displayedOrders.length,
-        "currentOrderIndex:",
-        currentOrderIndex
-      );
-      console.log(
-        "Delete Order: displayedOrders content at deletion attempt:",
-        displayedOrders.map((o) => ({ id: o.id, status: o.header?.status }))
-      );
-      console.log(
-        "Delete Order: Value of currentOrderIndex:",
-        currentOrderIndex
-      );
 
       const orderIdToSoftDelete = displayedOrders[currentOrderIndex].id;
-      console.log(
-        "Delete Order: Attempting to soft delete order with ID:",
-        orderIdToSoftDelete
-      );
 
-      setTimeout(async () => {
-        await handleSoftDeleteOrderInFirestore(orderIdToSoftDelete);
-        console.log(
-          "Delete Order: Soft deletion initiated. Firestore onSnapshot will handle UI update."
-        );
-      }, 50);
+      await handleSoftDeleteOrderInFirestore(orderIdToSoftDelete);
     } catch (error) {
-      console.error("Error in handleDeleteCurrentOrder (soft delete):", error);
     }
   };
 
   const handleSearchClick = async () => {
     const term = searchTerm.toUpperCase();
-    console.log("Action: Search button clicked. Term:", term);
     if (!term) return;
 
     const conflicts = await checkPresenceConflict(term);
@@ -1902,7 +1617,6 @@ const App = () => {
       setPresenceConflictUsers(conflicts);
       setPendingSearchTerm(term);
       setShowPresenceModal(true);
-      console.log("Presence: Conflict detected with users:", conflicts);
     } else {
       await enterMailId(term);
     }
@@ -1920,14 +1634,11 @@ const App = () => {
     await writePresence(term);
     subscribeToPresence(term);
     setCommittedSearchTerm(term);
-    console.log("Presence: Entered mailId:", term);
   };
 
   const handleClearSearch = async () => {
-    console.log("Action: 'Clear Search' button clicked. Clearing search term.");
 
     if (activeOrderId) {
-      console.log("Clear Search: Saving current active order before clearing search filter.");
       await saveCurrentFormDataToDisplayed();
     }
 
@@ -1943,7 +1654,6 @@ const App = () => {
 
     setSearchTerm("");
     setCommittedSearchTerm("");
-    console.log("Clear Search: Search filter cleared.");
   };
 
   const isMobileDevice = () => {
@@ -1951,27 +1661,16 @@ const App = () => {
   };
 
   const performSendEmail = async () => {
-    console.log("Action: 'Send Email' button clicked.");
     try {
       if (!db || !userId) {
-        console.warn(
-          "Send Email: Firestore not initialized or user not authenticated. Cannot send email."
-        );
         return;
       }
 
-      console.log(
-        "Send Email: Saving current form data before consolidating for email."
-      );
       await saveCurrentFormDataToDisplayed();
 
       const mailGlobalId = headerInfo.mailId;
-      console.log("Send Email: Mail ID of the active order:", mailGlobalId);
 
       if (!mailGlobalId) {
-        console.error(
-          "Send Email: Mail ID is missing when attempting to send email. Cannot consolidate orders."
-        );
         setShowOrderActionsModal(false);
         return;
       }
@@ -1988,12 +1687,6 @@ const App = () => {
           where("header.status", "==", "draft"),
           where("header.reDestinatarios", "==", currentProveedor)
         );
-        console.log(
-          "Send Email: Querying for draft orders to group under Mail ID:",
-          mailGlobalId,
-          "and Supplier:",
-          currentProveedor
-        );
         const ordersToGroupSnapshot = await getDocs(ordersToGroupQuery);
         const batch = writeBatch(db);
 
@@ -2007,34 +1700,19 @@ const App = () => {
               docSnapshot.id
             );
             batch.update(orderRef, { "header.mailId": mailGlobalId });
-            console.log(
-              `Send Email - Grouping: Order ${docSnapshot.id} updated with Mail ID: ${mailGlobalId}`
-            );
           }
         });
 
         if (batch._mutations.length > 0) {
           await batch.commit();
-          console.log(
-            "Send Email - Grouping: Batch update committed for grouping orders."
-          );
         } else {
-          console.log(
-            "Send Email - Grouping: No other draft orders to group or already grouped."
-          );
         }
       } else {
-        console.warn(
-          "Send Email - Grouping: Skipping grouping, missing currentProveedor or mailGlobalId."
-        );
       }
 
       const q = query(
         ordersCollectionRef,
         where("header.mailId", "==", mailGlobalId)
-      );
-      console.log(
-        `Send Email: Querying Firestore for orders with header.mailId == '${mailGlobalId}' AFTER grouping update.`
       );
       const querySnapshot = await getDocs(q);
 
@@ -2047,21 +1725,12 @@ const App = () => {
       ordersToProcess = ordersToProcess.filter(
         (order) => order.header?.status !== "deleted"
       );
-      console.log(
-        "Send Email: Orders after filtering out 'deleted' ones:",
-        ordersToProcess.map((o) => ({ id: o.id, status: o.header?.status }))
-      );
 
       const activeOrderCurrentState = {
         id: activeOrderId,
         header: { ...headerInfo },
         items: orderItems.map((item) => ({ ...item })),
       };
-      console.log("Send Email: Active order's local state:", {
-        id: activeOrderCurrentState.id,
-        mailId: activeOrderCurrentState.header?.mailId,
-        status: activeOrderCurrentState.header?.status,
-      });
 
       const existingIndexInProcess = ordersToProcess.findIndex(
         (o) => o.id === activeOrderId
@@ -2069,14 +1738,8 @@ const App = () => {
       if (existingIndexInProcess !== -1) {
         if (activeOrderCurrentState.header?.status !== "deleted") {
           ordersToProcess[existingIndexInProcess] = activeOrderCurrentState;
-          console.log(
-            "Send Email: Active order updated in consolidation list with local state (not deleted)."
-          );
         } else {
           ordersToProcess.splice(existingIndexInProcess, 1);
-          console.log(
-            "Send Email: Active order was deleted locally, removed from consolidation list."
-          );
         }
       } else if (
         activeOrderCurrentState.id &&
@@ -2084,9 +1747,6 @@ const App = () => {
         activeOrderCurrentState.header?.status !== "deleted"
       ) {
         ordersToProcess.push(activeOrderCurrentState);
-        console.log(
-          "Send Email: Active order added to consolidation list (not deleted)."
-        );
       }
 
       ordersToProcess.sort((a, b) => {
@@ -2094,14 +1754,6 @@ const App = () => {
         const dateB = b.header?.createdAt || 0;
         return dateA - dateB;
       });
-      console.log(
-        "Send Email: Orders after local state merge and sort:",
-        ordersToProcess.map((o) => ({
-          id: o.id,
-          mailId: o.header?.mailId,
-          status: o.header?.status,
-        }))
-      );
 
       for (const order of ordersToProcess) {
         if (order.header?.status === "draft") {
@@ -2118,14 +1770,10 @@ const App = () => {
           });
           order.header.status = "sent";
           order.header.mailId = mailGlobalId;
-          console.log(`Send Email: Order ${order.id} marked as 'sent'.`);
         }
       }
 
       if (ordersToProcess.length === 0) {
-        console.log(
-          "Send Email: No orders to send after consolidation (all filtered out or none existed)."
-        );
         setPreviewHtmlContent(
           '<p style="text-align: center; color: #888;">No hay pedidos activos para enviar con este ID de Mail. Todos los pedidos asociados están eliminados o no existen.</p>'
         );
@@ -2158,10 +1806,6 @@ const App = () => {
         Array.from(allEspecies),
         ""
       );
-      console.log(
-        "Send Email: Consolidated Email Subject (without Mail ID):",
-        consolidatedSubject
-      );
 
       // All styles are 100% inline inside generateSingleOrderHtml.
       // No <style> block — Outlook Desktop strips stylesheet blocks on paste.
@@ -2182,10 +1826,8 @@ const App = () => {
 
       await copyFormattedContentToClipboard(fullEmailBodyHtml);
       saveLastSend(mailGlobalId, consolidatedSubject, fullEmailBodyHtml);
-      console.log("Send Email: Email content copied to clipboard.");
 
       openEmailClient(consolidatedSubject);
-      console.log("Send Email: Email client opened via openEmailClient.");
 
       setShowOrderActionsModal(false);
       setSearchTerm("");
@@ -2193,29 +1835,16 @@ const App = () => {
       setEmailActionTriggered(false);
       setIsShowingPreview(false);
       setPreviewHtmlContent("");
-      console.log("Send Email: UI states reset after email send.");
     } catch (error) {
-      console.error("Send Email: Failed to send email:", error);
     }
   };
 
   const handlePreviewOrder = async () => {
-    console.log("Action: 'Preview Order' button clicked.");
-    console.log(
-      "Preview Order: Saving current form data before consolidating for preview."
-    );
     await saveCurrentFormDataToDisplayed();
 
     const previewGlobalId = headerInfo.mailId;
-    console.log(
-      "Preview Order: Mail ID of the active order for preview:",
-      previewGlobalId
-    );
 
     if (!previewGlobalId) {
-      console.warn(
-        "Preview Order: Cannot preview: No Mail ID associated with the current order."
-      );
       setPreviewHtmlContent(
         '<p style="text-align: center; color: #888;">No hay pedidos para previsualizar sin un ID de Mail asociado.</p>'
       );
@@ -2235,12 +1864,6 @@ const App = () => {
         where("header.status", "==", "draft"),
         where("header.reDestinatarios", "==", currentProveedor)
       );
-      console.log(
-        "Preview Order: Querying for draft orders to group under Mail ID:",
-        previewGlobalId,
-        "and Supplier:",
-        currentProveedor
-      );
       const ordersToGroupSnapshot = await getDocs(ordersToGroupQuery);
       const batch = writeBatch(db);
 
@@ -2254,34 +1877,19 @@ const App = () => {
             docSnapshot.id
           );
           batch.update(orderRef, { "header.mailId": previewGlobalId });
-          console.log(
-            `Preview Order - Grouping: Order ${docSnapshot.id} updated with Mail ID: ${previewGlobalId}`
-          );
         }
       });
 
       if (batch._mutations.length > 0) {
         await batch.commit();
-        console.log(
-          "Preview Order - Grouping: Batch update committed for grouping orders (preview)."
-        );
       } else {
-        console.log(
-          "Preview Order - Grouping: No other draft orders to group for preview or already grouped."
-        );
       }
     } else {
-      console.warn(
-        "Preview Order - Grouping: Skipping grouping for preview, missing currentProveedor or previewGlobalId."
-      );
     }
 
     const q = query(
       ordersCollectionRef,
       where("header.mailId", "==", previewGlobalId)
-    );
-    console.log(
-      `Preview Order: Querying Firestore for orders with header.mailId == '${previewGlobalId}' AFTER grouping update.`
     );
     const querySnapshot = await getDocs(q);
 
@@ -2294,21 +1902,12 @@ const App = () => {
     ordersForPreview = ordersForPreview.filter(
       (order) => order.header?.status !== "deleted"
     );
-    console.log(
-      "Preview Order: Orders after filtering out 'deleted' ones:",
-      ordersForPreview.map((o) => ({ id: o.id, status: o.header?.status }))
-    );
 
     const activeOrderCurrentState = {
       id: activeOrderId,
       header: { ...headerInfo },
       items: orderItems.map((item) => ({ ...item })),
     };
-    console.log("Preview Order: Active order's local state:", {
-      id: activeOrderCurrentState.id,
-      mailId: activeOrderCurrentState.header?.mailId,
-      status: activeOrderCurrentState.header?.status,
-    });
 
     const existingIndex = ordersForPreview.findIndex(
       (o) => o.id === activeOrderId
@@ -2316,14 +1915,8 @@ const App = () => {
     if (existingIndex !== -1) {
       if (activeOrderCurrentState.header?.status !== "deleted") {
         ordersForPreview[existingIndex] = activeOrderCurrentState;
-        console.log(
-          "Preview Order: Active order updated in consolidation list with local state (not deleted)."
-        );
       } else {
         ordersForPreview.splice(existingIndex, 1);
-        console.log(
-          "Preview Order: Active order was deleted locally, removed from consolidation list."
-        );
       }
     } else if (
       activeOrderCurrentState.id &&
@@ -2331,9 +1924,6 @@ const App = () => {
       activeOrderCurrentState.header?.status !== "deleted"
     ) {
       ordersForPreview.push(activeOrderCurrentState);
-      console.log(
-        "Preview Order: Active order added to consolidation list (not deleted)."
-      );
     }
 
     ordersForPreview.sort((a, b) => {
@@ -2341,20 +1931,11 @@ const App = () => {
       const dateB = b.header?.createdAt || 0;
       return dateA - dateB;
     });
-    console.log(
-      "Preview Order: Orders after local state merge and sort:",
-      ordersForPreview.map((o) => ({
-        id: o.id,
-        mailId: o.header?.mailId,
-        status: o.header?.status,
-      }))
-    );
 
     if (ordersForPreview.length === 0) {
       setPreviewHtmlContent(
         '<p style="text-align: center; color: #888;">No hay pedidos activos para previsualizar con este ID de Mail. Todos los pedidos asociados están eliminados o no existen.</p>'
       );
-      console.log("Preview Order: No orders to preview generated.");
     } else {
       let innerPreviewHtml = "";
       ordersForPreview.forEach((order, index) => {
@@ -2382,46 +1963,33 @@ const App = () => {
 </body>
 </html>`;
       setPreviewHtmlContent(finalPreviewHtml);
-      console.log("Preview Order: Preview content generated.");
     }
     setIsShowingPreview(true);
   };
 
   const handleFinalizeOrder = async () => {
-    console.log("Action: 'Finalize Order' button clicked.");
 
     let mailIdToAssign = headerInfo.mailId;
     if (!headerInfo.mailId) {
       mailIdToAssign = crypto.randomUUID().substring(0, 8).toUpperCase();
-      console.log("Finalize Order: Generating new Mail ID:", mailIdToAssign);
       setHeaderInfo((prev) => ({ ...prev, mailId: mailIdToAssign }));
     } else {
-      console.log(
-        "Finalize Order: Order already has Mail ID. Not generating new one:",
-        headerInfo.mailId
-      );
     }
 
-    console.log(
-      "Finalize Order: Saving current form data before modal opens (with potentially new Mail ID)."
-    );
     await saveCurrentFormDataToDisplayed();
 
     setShowOrderActionsModal(true);
     setEmailActionTriggered(false);
     setIsShowingPreview(false);
     setPreviewHtmlContent("");
-    console.log("Finalize Order: Modal opened with Mail ID:", mailIdToAssign);
   };
 
   const handleOpenObservationModal = (itemId) => {
-    console.log("Observation Modal: Opening for item ID:", itemId);
     const itemToEdit = orderItems.find((item) => item.id === itemId);
     if (itemToEdit) {
       setCurrentEditingItemData(itemToEdit);
       setModalObservationText(itemToEdit.estado);
       setShowObservationModal(true);
-      console.log("Observation Modal: Data loaded for item:", itemId);
     }
   };
 
@@ -2431,21 +1999,15 @@ const App = () => {
       if (observationTextareaRef.current.value) {
         observationTextareaRef.current.select();
       }
-      console.log("Observation Modal: Textarea focused.");
     }
   }, [showObservationModal]);
 
   const handleSaveObservation = () => {
-    console.log("Observation Modal: Saving observation.");
     if (currentEditingItemData) {
       const formattedObservation = modalObservationText
         ? modalObservationText.charAt(0).toUpperCase() +
           modalObservationText.slice(1).toLowerCase()
         : "";
-      console.log(
-        "Observation Modal: Formatted observation:",
-        formattedObservation
-      );
 
       const updatedItems = orderItems.map((item) =>
         item.id === currentEditingItemData.id
@@ -2458,24 +2020,16 @@ const App = () => {
         header: { ...headerInfo },
         items: updatedItems,
       });
-      console.log(
-        "Observation Modal: Observation saved for item:",
-        currentEditingItemData.id,
-        "Triggering Firestore save."
-      );
     }
     setShowObservationModal(false);
     setCurrentEditingItemData(null);
     setModalObservationText("");
-    console.log("Observation Modal: Closed.");
   };
 
   const handleCloseObservationModal = () => {
-    console.log("Observation Modal: Closing (cancel).");
     setShowObservationModal(false);
     setCurrentEditingItemData(null);
     setModalObservationText("");
-    console.log("Observation Modal: Closed.");
   };
 
   useEffect(() => {
@@ -2517,7 +2071,6 @@ const App = () => {
         e.key === "ArrowDown"
       ) {
         e.preventDefault();
-        console.log("Keyboard Nav: Arrow key pressed:", e.key);
 
         if (headerIndex !== -1) {
           let nextIndex = headerIndex;
@@ -2528,8 +2081,8 @@ const App = () => {
               (headerIndex - 1 + headerInputOrder.length) %
               headerInputOrder.length;
           } else if (e.key === "ArrowDown") {
-            if (orderItems.length > 0) {
-              const firstRowId = orderItems[0].id;
+            if (orderItemsRef.current.length > 0) {
+              const firstRowId = orderItemsRef.current[0].id;
               const firstColName = tableColumnOrder[0];
               if (
                 tableInputRefs.current[firstRowId] &&
@@ -2537,9 +2090,6 @@ const App = () => {
               ) {
                 tableInputRefs.current[firstRowId][firstColName].focus();
                 isHandled = true;
-                console.log(
-                  "Keyboard Nav: Moved from header to first table row."
-                );
               }
             }
           } else if (e.key === "ArrowUp") {
@@ -2549,7 +2099,6 @@ const App = () => {
             if (headerInputRefs.current[headerInputOrder[nextIndex]]) {
               headerInputRefs.current[headerInputOrder[nextIndex]].focus();
               isHandled = true;
-              console.log("Keyboard Nav: Moved within header (ArrowUp).");
             }
           }
           if (
@@ -2558,11 +2107,10 @@ const App = () => {
           ) {
             headerInputRefs.current[headerInputOrder[nextIndex]].focus();
             isHandled = true;
-            console.log("Keyboard Nav: Moved within header (ArrowLeft/Right).");
           }
         } else if (tablePosition) {
           const { rowId, colName } = tablePosition;
-          const currentRowIndex = orderItems.findIndex(
+          const currentRowIndex = orderItemsRef.current.findIndex(
             (item) => item.id === rowId
           );
           const currentColIndex = tableColumnOrder.indexOf(colName);
@@ -2591,8 +2139,8 @@ const App = () => {
 
           let nextElementToFocus = null;
 
-          if (targetRowIndex >= 0 && targetRowIndex < orderItems.length) {
-            const targetRowId = orderItems[targetRowIndex]?.id;
+          if (targetRowIndex >= 0 && targetRowIndex < orderItemsRef.current.length) {
+            const targetRowId = orderItemsRef.current[targetRowIndex]?.id;
             const targetColName = tableColumnOrder[targetColIndex];
             if (
               tableInputRefs.current[targetRowId] &&
@@ -2600,20 +2148,14 @@ const App = () => {
             ) {
               nextElementToFocus =
                 tableInputRefs.current[targetRowId][targetColName];
-              console.log(
-                `Keyboard Nav: Moving to table cell [${targetRowIndex}, ${targetColName}].`
-              );
             }
           } else if (targetRowIndex < 0) {
             const lastHeaderInputName =
               headerInputOrder[headerInputOrder.length - 1];
             nextElementToFocus = headerInputRefs.current[lastHeaderInputName];
-            console.log(
-              "Keyboard Nav: Moving from table to last header input."
-            );
-          } else if (targetRowIndex >= orderItems.length) {
-            const lastValidRowIndex = orderItems.length - 1;
-            const lastValidRowId = orderItems[lastValidRowIndex]?.id;
+          } else if (targetRowIndex >= orderItemsRef.current.length) {
+            const lastValidRowIndex = orderItemsRef.current.length - 1;
+            const lastValidRowId = orderItemsRef.current[lastValidRowIndex]?.id;
             const targetColName = tableColumnOrder[currentColIndex];
             if (
               lastValidRowId &&
@@ -2622,9 +2164,6 @@ const App = () => {
             ) {
               nextElementToFocus =
                 tableInputRefs.current[lastValidRowId][targetColName];
-              console.log(
-                "Keyboard Nav: Staying on last table row (ArrowDown)."
-              );
             }
           }
 
@@ -2640,10 +2179,9 @@ const App = () => {
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [orderItems, headerInfo]);
+  }, []); // stable: reads orderItems via orderItemsRef, uses only refs for DOM
 
   if (isLoading) {
-    console.log("Render: App is loading...");
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
         <div className="text-blue-600 text-lg font-semibold">
@@ -2655,10 +2193,6 @@ const App = () => {
 
   const currentOrderIsDeleted = headerInfo.status === "deleted";
 
-  console.log("Render: App is ready. Current activeOrderId:", activeOrderId);
-  console.log("Render: Current headerInfo:", headerInfo);
-  console.log("Render: Current orderItems:", orderItems);
-  console.log("Render: Current order is deleted:", currentOrderIsDeleted);
 
   return (
     <div className="min-h-screen bg-gray-100 p-4 sm:p-6 lg:p-8 font-inter">
@@ -2716,12 +2250,11 @@ const App = () => {
         {userId && (
           <div className="absolute top-4 left-4 text-xs text-gray-500 flex items-center gap-2">
             <span title={`ID: ${userId}`}>
-              🙍 {localStorage.getItem("frutam_uid")?.substring(0, 8).toUpperCase() || userId.substring(0, 8).toUpperCase()}
+              🙍 {userId.substring(0, 8).toUpperCase()}
             </span>
             <button
               onClick={() => {
                 if (window.confirm("¿Resetear tu identidad de sesión? Esto creará un nuevo ID y perderás acceso a tus borradores actuales.")) {
-                  localStorage.removeItem("frutam_uid");
                   window.location.reload();
                 }
               }}

@@ -551,6 +551,10 @@ const App = () => {
   const activeOrderIdRef = useRef(null);
   activeOrderIdRef.current = activeOrderId;
 
+  // ─── DRAG & DROP REFS ────────────────────────────────────────────────────────
+  const dragItemIndex = useRef(null);   // index being dragged
+  const dragOverIndex = useRef(null);  // index currently hovered
+
   const headerInputOrder = [
     "reDestinatarios",
     "deNombrePais",
@@ -579,21 +583,42 @@ const App = () => {
         `artifacts/${appId}/public/data/pedidos`
       );
       const { header, items } = orderToSave;
-
       const orderDocId = orderToSave.id || doc(ordersCollectionRef).id;
-
-      const dataToSave = {
-        header: {
-          ...header,
-          lastModifiedBy: userId,
-          updatedAt: Date.now(),
-        },
-        items: JSON.stringify(items),
-      };
-
-
       const orderDocRef = doc(ordersCollectionRef, orderDocId);
-      await setDoc(orderDocRef, dataToSave);
+
+      // Distinguish create vs update so Security Rules evaluate correctly.
+      // - create: send full document including createdBy + createdAt (required by rule)
+      // - update: use updateDoc so we never overwrite createdBy/createdAt,
+      //   which avoids the createdAtUnchanged() rule failure on legacy docs
+      //   that were saved without a numeric createdAt.
+      if (orderToSave.isNew) {
+        // Brand-new document — setDoc triggers the "create" rule.
+        // Must include createdBy + createdAt (required by rule).
+        await setDoc(orderDocRef, {
+          header: {
+            ...header,
+            lastModifiedBy: userId,
+            updatedAt: Date.now(),
+          },
+          items: JSON.stringify(items),
+        });
+      } else {
+        // Existing document — use dot-notation so Firestore merges individual
+        // fields instead of replacing the entire "header" object.
+        // This means createdBy and createdAt in Firestore are NEVER touched,
+        // so createdByUnchanged() in Security Rules always passes regardless
+        // of what the local header state contains.
+        const updatePayload = { items: JSON.stringify(items) };
+        const skipFields = new Set(["createdBy", "createdAt"]);
+        Object.entries(header).forEach(([key, value]) => {
+          if (!skipFields.has(key)) {
+            updatePayload[`header.${key}`] = value;
+          }
+        });
+        updatePayload["header.lastModifiedBy"] = userId;
+        updatePayload["header.updatedAt"] = Date.now();
+        await updateDoc(orderDocRef, updatePayload);
+      }
     } catch (error) {
       throw error;
     }
@@ -829,6 +854,7 @@ const App = () => {
           try {
             await saveOrderToFirestore({
               id: newOrderId,
+              isNew: true,
               header: newBlankHeader,
               items: newBlankItems,
             });
@@ -1175,6 +1201,22 @@ const App = () => {
         items: updatedItems,
       });
       return updatedItems;
+    });
+  };
+
+  const handleDragReorder = (fromIndex, toIndex) => {
+    if (fromIndex === toIndex) return;
+    setOrderItems((prev) => {
+      const updated = [...prev];
+      const [moved] = updated.splice(fromIndex, 1);
+      updated.splice(toIndex, 0, moved);
+      // Save new order to Firestore immediately
+      saveOrderToFirestore({
+        id: activeOrderId,
+        header: { ...headerInfo },
+        items: updated,
+      });
+      return updated;
     });
   };
 
@@ -1539,6 +1581,7 @@ const App = () => {
 
     await saveOrderToFirestore({
       id: newOrderId,
+      isNew: true,
       header: newBlankHeader,
       items: newBlankItems,
     });
@@ -2532,7 +2575,8 @@ const App = () => {
               <table className="min-w-full divide-y divide-gray-200 hidden md:table">
                 <thead className="bg-blue-600 text-white">
                   <tr style={{ backgroundColor: "#2563eb", color: "#ffffff" }}>
-                    <th scope="col" className="px-1 py-px text-xs font-medium uppercase tracking-wider rounded-tl-lg whitespace-nowrap">Pallets</th>
+                    <th scope="col" className="px-1 py-px text-xs font-medium uppercase tracking-wider rounded-tl-lg whitespace-nowrap" title="Arrastrar para reordenar">⠿</th>
+                    <th scope="col" className="px-1 py-px text-xs font-medium uppercase tracking-wider whitespace-nowrap">Pallets</th>
                     <th scope="col" className="px-1 py-px text-xs font-medium uppercase tracking-wider whitespace-nowrap">Especie</th>
                     <th scope="col" className="px-1 py-px text-xs font-medium uppercase tracking-wider whitespace-nowrap">Variedad</th>
                     <th scope="col" className="px-1 py-px text-xs font-medium uppercase tracking-wider whitespace-nowrap">Formato</th>
@@ -2546,14 +2590,29 @@ const App = () => {
                   {orderItems.map((item, index) => (
                     <tr
                       key={item.id}
+                      draggable={!currentOrderIsDeleted}
+                      onDragStart={() => { dragItemIndex.current = index; }}
+                      onDragEnter={() => { dragOverIndex.current = index; }}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDragEnd={() => {
+                        if (dragItemIndex.current !== null && dragOverIndex.current !== null) {
+                          handleDragReorder(dragItemIndex.current, dragOverIndex.current);
+                        }
+                        dragItemIndex.current = null;
+                        dragOverIndex.current = null;
+                      }}
                       className={`hover:bg-gray-50 ${
                         index % 2 === 0 ? "bg-gray-50" : "bg-white"
                       } ${
                         item.isCanceled || currentOrderIsDeleted
                           ? "text-red-500"
                           : ""
-                      }`}
+                      } ${!currentOrderIsDeleted ? "cursor-grab active:cursor-grabbing" : ""}`}
+                      style={{ userSelect: "none" }}
                     >
+                      <td className="px-1 py-px text-xs border-r whitespace-nowrap text-center text-gray-300 select-none" title="Arrastrar para reordenar" style={{ cursor: "grab", fontSize: "16px", width: "20px" }}>
+                        ⠿
+                      </td>
                       <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center" }}>
                         <TableInput
                           type="number"
@@ -2750,9 +2809,27 @@ const App = () => {
                   }`}
                 >
                   <div className="flex justify-between items-center pb-2 border-b border-gray-100">
-                    <span className="text-xs font-semibold text-blue-600">
-                      Artículo #{index + 1}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="text-gray-300 text-lg select-none"
+                        title="Arrastrar para reordenar"
+                        style={{ cursor: "grab", lineHeight: 1 }}
+                        draggable={!currentOrderIsDeleted}
+                        onDragStart={() => { dragItemIndex.current = index; }}
+                        onDragEnter={() => { dragOverIndex.current = index; }}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDragEnd={() => {
+                          if (dragItemIndex.current !== null && dragOverIndex.current !== null) {
+                            handleDragReorder(dragItemIndex.current, dragOverIndex.current);
+                          }
+                          dragItemIndex.current = null;
+                          dragOverIndex.current = null;
+                        }}
+                      >⠿</span>
+                      <span className="text-xs font-semibold text-blue-600">
+                        Artículo #{index + 1}
+                      </span>
+                    </div>
                     <div className="flex space-x-2">
                       <button onClick={() => handleOpenObservationModal(item.id)} className="text-blue-600 hover:text-blue-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 p-1 rounded-md" title="Editar Observación" disabled={currentOrderIsDeleted}>
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
@@ -3188,6 +3265,21 @@ const App = () => {
         </>,
         document.body
       )}
+      {/* ── VERSION FOOTER ───────────────────────────────────────────────────── */}
+      <div style={{
+        position: "fixed",
+        bottom: "8px",
+        left: "50%",
+        transform: "translateX(-50%)",
+        fontSize: "11px",
+        color: "#9ca3af",
+        pointerEvents: "none",
+        userSelect: "none",
+        whiteSpace: "nowrap",
+        zIndex: 10,
+      }}>
+        v13 · 03 Mar 2026
+      </div>
     </div>
   );
 };

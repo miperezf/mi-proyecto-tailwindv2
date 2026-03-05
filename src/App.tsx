@@ -23,10 +23,6 @@ import {
   deleteDoc,
 } from "firebase/firestore";
 
-// Configuración de Firebase usando variables de entorno de Vite
-// Es crucial que las variables de entorno en Vite comiencen con `VITE_`
-// Note: In the Canvas environment, __firebase_config and __initial_auth_token are provided globally.
-// This setup assumes a Vite environment for local development, and will fall back to global vars if available.
 const firebaseConfig =
   typeof __firebase_config !== "undefined"
     ? JSON.parse(__firebase_config)
@@ -40,13 +36,10 @@ const firebaseConfig =
         measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
       };
 
-// Initialize Firebase outside the component to prevent re-initializations
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-
-// Component for rendering a single input field with styling
 const InputField = React.forwardRef(
   (
     {
@@ -55,16 +48,15 @@ const InputField = React.forwardRef(
       value,
       onChange,
       onBlur,
-      onFocus, // Added onFocus prop
+      onFocus,
       placeholder = "",
       className = "",
       type = "text",
-      list, // Add list prop for datalist
-      readOnly = false, // Add readOnly prop
+      list,
+      readOnly = false,
     },
     ref
   ) => {
-    // Ensure value is explicitly a string, falling back to an empty string if null/undefined
     const safeValue =
       value === null || value === undefined ? "" : String(value);
     return (
@@ -77,24 +69,23 @@ const InputField = React.forwardRef(
         </label>
         <input
           type={type}
-          id={name} // Keep ID for accessibility in header fields
+          id={name}
           name={name}
-          value={safeValue} // Use the safeValue
+          value={safeValue}
           onChange={onChange}
-          onFocus={onFocus} // Added onFocus handler
-          onBlur={onBlur} // Add onBlur event for capitalization
+          onFocus={onFocus}
+          onBlur={onBlur}
           placeholder={placeholder}
           className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 bg-gray-50 border ${className}`}
-          ref={ref} // Pass the ref here
-          list={list} // Pass the list prop here
-          readOnly={readOnly} // Apply readOnly property
+          ref={ref}
+          list={list}
+          readOnly={readOnly}
         />
       </div>
     );
   }
 );
 
-// Component for rendering a table cell input
 const TableInput = React.forwardRef(
   (
     {
@@ -102,7 +93,7 @@ const TableInput = React.forwardRef(
       value,
       onChange,
       onBlur,
-      onFocus, // Added onFocus prop
+      onFocus,
       type = "text",
       placeholder = "",
       readOnly = false,
@@ -111,49 +102,41 @@ const TableInput = React.forwardRef(
     },
     ref
   ) => {
-    // Added 'list' prop
-    // Ensure value is explicitly a string, falling back to an an empty string if null/undefined
     const safeValue =
       value === null || value === undefined ? "" : String(value);
     return (
       <input
         type={type}
-        // Removed dynamic 'id' prop from TableInput to prevent re-rendering/selection issues.
         name={name}
-        value={safeValue} // Use the safeValue
+        value={safeValue}
         onChange={onChange}
-        onFocus={onFocus} // Added onFocus handler
-        onBlur={onBlur} // Add onBlur event for capitalization
+        onFocus={onFocus}
+        onBlur={onBlur}
         placeholder={placeholder}
-        // Apply line-through directly to the input if canceled
         className={`w-full h-full p-px border-none bg-transparent focus:outline-none focus:ring-1 focus:ring-blue-500 rounded-md ${
           isCanceledProp ? "line-through" : ""
         }`}
-        ref={ref} // Pass the ref here
-        readOnly={readOnly} // Apply readOnly property
-        list={list} // Pass the list prop here
+        ref={ref}
+        readOnly={readOnly}
+        list={list}
       />
     );
   }
 );
 
-// Main App component
 const App = () => {
-  // Using projectId as appId for the Firestore collection path, prioritizing __app_id
   const appId =
     typeof __app_id !== "undefined" ? __app_id : firebaseConfig.projectId;
 
   const [userId, setUserId] = useState(null);
-  const [isAuthReady, setIsAuthReady] = useState(false); // To know when authentication is ready
-  const [isLoading, setIsLoading] = useState(true); // Loading state for data fetching
-  const [allOrdersFromFirestore, setAllOrdersFromFirestore] = useState([]); // Stores raw data from Firestore
-  const [displayedOrders, setDisplayedOrders] = useState([]); // Orders currently displayed (after search filter)
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [allOrdersFromFirestore, setAllOrdersFromFirestore] = useState([]);
+  const [displayedOrders, setDisplayedOrders] = useState([]);
 
-  // State for search functionality
   const [searchTerm, setSearchTerm] = useState("");
-  const [committedSearchTerm, setCommittedSearchTerm] = useState(""); // New state for search triggered by button
+  const [committedSearchTerm, setCommittedSearchTerm] = useState("");
 
-  // State to explicitly track the ID of the currently active order being edited
   const [activeOrderId, setActiveOrderId] = useState(null);
 
   // ─── PRESENCE SYSTEM ────────────────────────────────────────────────────────
@@ -306,10 +289,12 @@ const App = () => {
 
       ordersToProcess.forEach((order, index) => {
         innerEmailContentHtml += `
-          <h3 style="font-size:18px;color:#2563eb;margin-top:40px;margin-bottom:15px;text-align:left;">
-            Pedido #${index + 1}
-          </h3>
-          ${generateSingleOrderHtml(order.header, order.items, index + 1)}
+            <tr>
+              <td style="padding-bottom:8px;">
+                <h3 style="margin:0;font-size:16px;color:#2563eb;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
+              </td>
+            </tr>
+            ${generateSingleOrderHtml(order.header, order.items, index + 1)}
         `;
         if (order.header.reDestinatarios) allProveedores.add(order.header.reDestinatarios);
         order.items.forEach((item) => { if (item.especie) allEspecies.add(item.especie); });
@@ -321,8 +306,7 @@ const App = () => {
         ""
       );
 
-      const fullEmailBodyHtml = `
-        <!DOCTYPE html>
+      const fullEmailBodyHtml = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -330,10 +314,10 @@ const App = () => {
   <title>Detalle de Pedido</title>
 </head>
 <body style="margin:0;padding:16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
-  <div style="text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">
-    Mail ID: ${mailId}
-  </div>
-  ${innerEmailContentHtml}
+  <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${mailId}</div>
+  <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:auto;">
+    ${innerEmailContentHtml}
+  </table>
 </body>
 </html>`;
 
@@ -365,9 +349,6 @@ const App = () => {
       try {
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
           if (user) {
-            // Always use the real Firebase Auth UID — never localStorage.
-            // localStorage caused desync: the stored UID could differ from
-            // request.auth.uid in Security Rules, causing permission errors.
             setUserId(user.uid);
             setIsAuthReady(true);
           } else {
@@ -380,7 +361,6 @@ const App = () => {
               } else {
                 await signInAnonymously(auth);
               }
-              // auth.currentUser is set synchronously after signIn
               setUserId(auth.currentUser?.uid ?? null);
             } catch (anonError) {
               setUserId(null);
@@ -540,20 +520,14 @@ const App = () => {
   const tableInputRefs = useRef({});
   const isUserEditing = useRef(false);
   const pendingSaveTimeout = useRef(null);
-  // Stable ref so the keyboard handler always sees current orderItems
-  // without needing to be re-registered on every state change.
   const orderItemsRef = useRef([]);
-  // Mirror into ref every render so the keyboard handler always has fresh data
   orderItemsRef.current = orderItems;
-  // Stable ref so the Firestore listener snapshot callback can read the current
-  // activeOrderId without needing it as a dependency (which would cause the
-  // listener to re-subscribe on every order change, creating an infinite loop).
   const activeOrderIdRef = useRef(null);
   activeOrderIdRef.current = activeOrderId;
 
   // ─── DRAG & DROP REFS ────────────────────────────────────────────────────────
-  const dragItemIndex = useRef(null);   // index being dragged
-  const dragOverIndex = useRef(null);  // index currently hovered
+  const dragItemIndex = useRef(null);
+  const dragOverIndex = useRef(null);
 
   const headerInputOrder = [
     "reDestinatarios",
@@ -586,14 +560,7 @@ const App = () => {
       const orderDocId = orderToSave.id || doc(ordersCollectionRef).id;
       const orderDocRef = doc(ordersCollectionRef, orderDocId);
 
-      // Distinguish create vs update so Security Rules evaluate correctly.
-      // - create: send full document including createdBy + createdAt (required by rule)
-      // - update: use updateDoc so we never overwrite createdBy/createdAt,
-      //   which avoids the createdAtUnchanged() rule failure on legacy docs
-      //   that were saved without a numeric createdAt.
       if (orderToSave.isNew) {
-        // Brand-new document — setDoc triggers the "create" rule.
-        // Must include createdBy + createdAt (required by rule).
         await setDoc(orderDocRef, {
           header: {
             ...header,
@@ -603,11 +570,6 @@ const App = () => {
           items: JSON.stringify(items),
         });
       } else {
-        // Existing document — use dot-notation so Firestore merges individual
-        // fields instead of replacing the entire "header" object.
-        // This means createdBy and createdAt in Firestore are NEVER touched,
-        // so createdByUnchanged() in Security Rules always passes regardless
-        // of what the local header state contains.
         const updatePayload = { items: JSON.stringify(items) };
         const skipFields = new Set(["createdBy", "createdAt"]);
         Object.entries(header).forEach(([key, value]) => {
@@ -620,12 +582,7 @@ const App = () => {
         await updateDoc(orderDocRef, updatePayload);
       }
     } catch (error) {
-      // Silently ignore permission errors — these happen when trying to save
-      // a document that Firestore rules have locked (e.g. sent/deleted status).
-      // The app should continue normally rather than crashing with an unhandled promise.
-      if (error?.code !== "permission-denied") {
-        console.error("saveOrderToFirestore unexpected error:", error);
-      }
+      throw error;
     }
   };
 
@@ -744,8 +701,6 @@ const App = () => {
     return () => window.removeEventListener("beforeunload", handleUnload);
   }, [presenceMailId]);
 
-  // ────────────────────────────────────────────────────────────────────────────
-
   useEffect(() => {
     const currentProveedor = headerInfo.reDestinatarios;
     const currentEspecie = orderItems[0]?.especie || "";
@@ -769,260 +724,180 @@ const App = () => {
     headerInfo.mailId,
   ]);
 
-  useEffect(() => {
-    if (!db || !userId || !isAuthReady) {
-      return;
-    }
-
-    setIsLoading(true);
-    const ordersCollectionRef = collection(
-      db,
-      `artifacts/${appId}/public/data/pedidos`
-    );
-
-    // Normal mode: filter server-side to only fetch the current user's orders.
-    // Requires the composite index on header.createdBy + header.createdAt
-    // declared in firestore.indexes.json.
-    // Search mode: fetch the full collection so cross-user mailId lookups work.
-    const q = committedSearchTerm
-      ? query(ordersCollectionRef)
-      : query(ordersCollectionRef, where("header.createdBy", "==", userId));
-
-
-    const unsubscribe = onSnapshot(
-      q,
-      async (snapshot) => {
-        let fetchedOrders = snapshot.docs.map((doc) => {
-          const data = doc.data();
-          let parsedItems = [];
-
-          if (data.items) {
-            if (typeof data.items === "string") {
-              try {
-                parsedItems = JSON.parse(data.items);
-              } catch (e) {
-                parsedItems = [];
-              }
-            } else if (Array.isArray(data.items)) {
-              parsedItems = data.items;
-            }
-          }
-
-          return {
-            id: doc.id,
-            header: data.header,
-            items: parsedItems,
-          };
-        });
-
-        fetchedOrders = fetchedOrders.map((order) => ({
-          ...order,
-          items: Array.isArray(order.items)
-            ? order.items
-            : [order.items].filter(Boolean),
-        }));
-
-        fetchedOrders.sort((a, b) => {
-          const dateA = a.header?.createdAt || 0;
-          const dateB = b.header?.createdAt || 0;
-          return dateA - dateB;
-        });
-
-        setAllOrdersFromFirestore(fetchedOrders);
-        setIsLoading(false);
-
-        const draftOrders = fetchedOrders.filter(
-          (order) =>
-            order.header?.status === "draft" &&
-            order.header?.createdBy === userId
-        );
-
-        // Check if the currently active order is still a draft
-        const activeIsStillDraft = draftOrders.some(
-          (o) => o.id === activeOrderIdRef.current
-        );
-        const needsNewDraft =
-          !committedSearchTerm &&
-          draftOrders.length === 0 &&
-          (activeOrderIdRef.current === null || !activeIsStillDraft);
-
-        if (needsNewDraft) {
-          // The only place a new draft is ever created — single source of truth.
-          // Fires on first load OR after a send when there are no drafts left.
-          const newOrderDocRef = doc(ordersCollectionRef);
-          const newOrderId = newOrderDocRef.id;
-          const newBlankHeader = {
-            ...initialHeaderState,
-            mailId: crypto.randomUUID().substring(0, 8).toUpperCase(),
-            emailSubject: generateEmailSubjectValue([], []),
-            status: "draft",
-            createdAt: Date.now(),
-            createdBy: userId,
-            updatedAt: Date.now(),
-          };
-          const newBlankItems = [{ ...initialItemState, id: crypto.randomUUID() }];
-          // Set activeOrderId optimistically BEFORE the Firestore write so that
-          // re-entrant snapshot callbacks see a non-null activeOrderIdRef and
-          // don't race to create a second draft (critical in Brave / fast networks).
-          setActiveOrderId(newOrderId);
-          try {
-            await saveOrderToFirestore({
-              id: newOrderId,
-              isNew: true,
-              header: newBlankHeader,
-              items: newBlankItems,
-            });
-          } catch (saveError) {
-            setActiveOrderId(null);
-            setIsLoading(false);
-          }
-        } else if (
-          draftOrders.length > 0 &&
-          activeOrderIdRef.current === null &&
-          !committedSearchTerm
-        ) {
-          setActiveOrderId(draftOrders[0].id);
+  const parseFirestoreOrders = (docs) => {
+    const orders = docs.map((d) => {
+      const data = d.data();
+      let parsedItems = [];
+      if (data.items) {
+        if (typeof data.items === "string") {
+          try { parsedItems = JSON.parse(data.items); } catch { parsedItems = []; }
+        } else if (Array.isArray(data.items)) {
+          parsedItems = data.items;
         }
-      },
-      (error) => {
-        setIsLoading(false);
       }
-    );
-
-    return () => unsubscribe();
-  }, [db, userId, isAuthReady, appId, committedSearchTerm]);
-
-  useEffect(() => {
-    let filtered = [];
-
-    if (committedSearchTerm) {
-      filtered = allOrdersFromFirestore.filter((order) => {
-        const mailIdMatch = (order.header?.mailId || "")
-          .toLowerCase()
-          .includes(committedSearchTerm.toLowerCase());
-        const isNotDeleted = order.header?.status !== "deleted";
-        return mailIdMatch && isNotDeleted;
-      });
-    } else {
-      filtered = allOrdersFromFirestore.filter((order) => {
-        const isDraft = order.header?.status === "draft";
-        const isOwner = order.header?.createdBy === userId;
-        return isDraft && isOwner;
-      });
-    }
-
-    filtered.sort((a, b) => {
-      const dateA = a.header?.createdAt || 0;
-      const dateB = b.header?.createdAt || 0;
-      return dateA - dateB;
+      return {
+        id: d.id,
+        header: data.header,
+        items: Array.isArray(parsedItems) ? parsedItems : [],
+      };
     });
+    return orders.sort((a, b) => (a.header?.createdAt || 0) - (b.header?.createdAt || 0));
+  };
 
-    setDisplayedOrders(filtered);
-
-    let newActiveOrderIdCandidate = null;
-
-    if (committedSearchTerm) {
-      const currentActiveInFiltered = filtered.find(
-        (order) => order.id === activeOrderId
+  // ─── FIX: loadSentHistory ────────────────────────────────────────────────────
+  // loadMyDrafts solo consulta status="draft", por eso allOrdersFromFirestore
+  // nunca contenía pedidos "sent" y el useMemo de sentHistory siempre devolvía
+  // [] → el botón del historial nunca aparecía.
+  //
+  // Esta función hace una consulta puntual de los últimos pedidos enviados
+  // (status="sent", lastModifiedBy==userId) y los fusiona en
+  // allOrdersFromFirestore junto con los drafts actuales, de modo que el
+  // useMemo de sentHistory pueda encontrarlos.
+  //
+  // Se llama al final de loadMyDrafts() (después de cargar drafts) y también
+  // al final de performSendEmail() (para que el historial aparezca
+  // inmediatamente tras el primer envío de la sesión).
+  // ─────────────────────────────────────────────────────────────────────────────
+  const loadSentHistory = async (currentDrafts = []) => {
+    if (!db || !userId) return;
+    try {
+      const ordersCollectionRef = collection(db, `artifacts/${appId}/public/data/pedidos`);
+      const q = query(
+        ordersCollectionRef,
+        where("header.lastModifiedBy", "==", userId),
+        where("header.status", "==", "sent")
       );
-      if (currentActiveInFiltered) {
-        newActiveOrderIdCandidate = activeOrderId;
-      } else if (filtered.length > 0) {
-        newActiveOrderIdCandidate = filtered[filtered.length - 1].id;
-      } else {
-        newActiveOrderIdCandidate = null;
-      }
-    } else {
-      const currentActiveInDrafts = filtered.find(
-        (order) => order.id === activeOrderId
-      );
-      if (currentActiveInDrafts) {
-        newActiveOrderIdCandidate = activeOrderId;
-      } else if (filtered.length > 0) {
-        newActiveOrderIdCandidate = filtered[filtered.length - 1].id;
-      } else {
-        newActiveOrderIdCandidate = null;
-      }
+      const snapshot = await getDocs(q);
+      const sentOrders = parseFirestoreOrders(snapshot.docs);
+      // Merge: drafts primero (son los activos en la UI), sent después (para el useMemo)
+      setAllOrdersFromFirestore([...currentDrafts, ...sentOrders]);
+    } catch (err) {
+      // No crítico — el historial simplemente no aparece. No bloquear la UI.
     }
+  };
 
-    if (newActiveOrderIdCandidate !== activeOrderId) {
-      setActiveOrderId(newActiveOrderIdCandidate);
-    } else if (
-      newActiveOrderIdCandidate &&
-      newActiveOrderIdCandidate === activeOrderId
-    ) {
-      const newIndex = filtered.findIndex(
-        (order) => order.id === activeOrderId
+  const loadMyDrafts = async () => {
+    if (!db || !userId) return;
+    setIsLoading(true);
+    try {
+      const ordersCollectionRef = collection(db, `artifacts/${appId}/public/data/pedidos`);
+      const q = query(
+        ordersCollectionRef,
+        where("header.createdBy", "==", userId),
+        where("header.status", "==", "draft")
       );
-      if (newIndex !== -1 && newIndex !== currentOrderIndex) {
-        setCurrentOrderIndex(newIndex);
-      }
-    }
-  }, [allOrdersFromFirestore, committedSearchTerm, activeOrderId]);
+      const snapshot = await getDocs(q);
+      const drafts = parseFirestoreOrders(snapshot.docs);
 
-  useEffect(() => {
-
-    if (activeOrderId && displayedOrders.length > 0) {
-      const orderToDisplay = displayedOrders.find(
-        (order) => order.id === activeOrderId
-      );
-      if (orderToDisplay) {
-        if (!isUserEditing.current) {
-          setHeaderInfo(orderToDisplay.header);
-          setOrderItems(orderToDisplay.items);
-        } else {
-        }
-        const foundIndex = displayedOrders.findIndex(
-          (order) => order.id === activeOrderId
-        );
-        if (foundIndex !== -1 && foundIndex !== currentOrderIndex) {
-          setCurrentOrderIndex(foundIndex);
-        }
-      } else {
-      }
-    }
-    else if (!activeOrderId && displayedOrders.length > 0) {
-      const firstDraftOrder = displayedOrders[0];
-      if (firstDraftOrder) {
-        setActiveOrderId(firstDraftOrder.id);
-      } else {
-        setHeaderInfo({
+      if (drafts.length === 0) {
+        // No drafts — crear uno en blanco
+        const newRef = doc(ordersCollectionRef);
+        const newHeader = {
           ...initialHeaderState,
+          mailId: crypto.randomUUID().substring(0, 8).toUpperCase(),
           emailSubject: generateEmailSubjectValue([], []),
-        });
-        setOrderItems([initialItemState]);
+          status: "draft",
+          createdAt: Date.now(),
+          createdBy: userId,
+          updatedAt: Date.now(),
+        };
+        const newItems = [{ ...initialItemState, id: crypto.randomUUID() }];
+        await saveOrderToFirestore({ id: newRef.id, isNew: true, header: newHeader, items: newItems });
+        const newDraft = { id: newRef.id, header: newHeader, items: newItems };
+        setDisplayedOrders([newDraft]);
+        setActiveOrderId(newRef.id);
+        setHeaderInfo(newHeader);
+        setOrderItems(newItems);
         setCurrentOrderIndex(0);
+        // FIX: cargar historial de sent fusionado con el nuevo draft
+        await loadSentHistory([newDraft]);
+      } else {
+        setDisplayedOrders(drafts);
+        const firstId = drafts[0].id;
+        setActiveOrderId(firstId);
+        setHeaderInfo(drafts[0].header);
+        setOrderItems(drafts[0].items);
+        setCurrentOrderIndex(0);
+        // FIX: cargar historial de sent fusionado con los drafts actuales
+        await loadSentHistory(drafts);
       }
+    } catch (err) {
+      console.error("loadMyDrafts error:", err);
+    } finally {
+      setIsLoading(false);
     }
-    else if (!activeOrderId && displayedOrders.length === 0) {
-      setHeaderInfo({
-        ...initialHeaderState,
-        emailSubject: generateEmailSubjectValue([], []),
+  };
+
+  const searchByMailId = async (mailId) => {
+    if (!db || !mailId) return;
+    setIsLoading(true);
+    try {
+      const ordersCollectionRef = collection(db, `artifacts/${appId}/public/data/pedidos`);
+      const q = query(
+        ordersCollectionRef,
+        where("header.mailId", "==", mailId)
+      );
+      const snapshot = await getDocs(q);
+      const orders = parseFirestoreOrders(snapshot.docs).filter(
+        (o) => o.header?.status !== "deleted"
+      );
+
+      // FIX: preservar los pedidos "sent" existentes en allOrdersFromFirestore
+      // cuando se entra en modo búsqueda, para que el botón del historial no
+      // desaparezca mientras el usuario revisa un mailId específico.
+      setAllOrdersFromFirestore((prev) => {
+        const sentOnly = prev.filter((o) => o.header?.status === "sent");
+        return [...orders, ...sentOnly];
       });
-      setOrderItems([initialItemState]);
-      setCurrentOrderIndex(0);
+
+      if (orders.length === 0) {
+        setDisplayedOrders([]);
+        setActiveOrderId(null);
+        setCurrentOrderIndex(0);
+      } else {
+        const asDrafts = orders.map((o) => ({
+          ...o,
+          header: { ...o.header, status: "draft" },
+        }));
+        setDisplayedOrders(asDrafts);
+        const last = asDrafts[asDrafts.length - 1];
+        setActiveOrderId(last.id);
+        setHeaderInfo(last.header);
+        setOrderItems(last.items);
+        setCurrentOrderIndex(asDrafts.length - 1);
+      }
+    } catch (err) {
+      console.error("searchByMailId error:", err);
+    } finally {
+      setIsLoading(false);
     }
-    else if (activeOrderId && displayedOrders.length === 0) {
-      setActiveOrderId(null);
-    }
-  }, [activeOrderId, displayedOrders]);
+  };
+
+  // Carga inicial — solo cuando auth está lista
+  useEffect(() => {
+    if (!isAuthReady || !userId) return;
+    loadMyDrafts();
+  }, [isAuthReady, userId]);
 
   const saveCurrentFormDataToDisplayed = async () => {
-    if (!db || !userId) return;
-    if (!activeOrderId) return;
+    if (!db || !userId || !activeOrderId) return;
 
-    // Double-guard: check both local state AND displayedOrders (source of truth).
-    // headerInfo.status can lag behind Firestore if the listener hasn't fired yet,
-    // so we also verify the order still exists as a draft in displayedOrders.
-    if (headerInfo.status !== "draft") return;
-    const liveOrder = displayedOrders.find((o) => o.id === activeOrderId);
-    if (!liveOrder || liveOrder.header?.status !== "draft") return;
+    const isOwnOrder = !headerInfo.createdBy || headerInfo.createdBy === userId;
 
     const currentOrderData = {
       id: activeOrderId,
       header: { ...headerInfo },
       items: orderItems.map((item) => ({ ...item })),
     };
+
+    setDisplayedOrders((prev) =>
+      prev.map((o) => (o.id === activeOrderId ? { ...o, ...currentOrderData } : o))
+    );
+
+    if (!isOwnOrder) {
+      return;
+    }
+
     await saveOrderToFirestore(currentOrderData);
   };
 
@@ -1048,7 +923,6 @@ const App = () => {
 
   const handleFocusField = () => {
     isUserEditing.current = true;
-    // Cancel any pending save-and-release so focus restores protection
     if (pendingSaveTimeout.current) {
       clearTimeout(pendingSaveTimeout.current);
       pendingSaveTimeout.current = null;
@@ -1056,24 +930,14 @@ const App = () => {
   };
 
   const handleBlurField = (originalBlurFn) => (e) => {
-    // Run the original blur handler first (e.g. capitalize)
     if (originalBlurFn) originalBlurFn(e);
 
-    // Schedule a save-and-release after a short delay.
-    // The delay lets React batch the state update from the blur handler
-    // before we snapshot headerInfo/orderItems for saving.
-    // If focus moves to another field, handleFocusField will cancel
-    // this timeout, keeping the guard active the whole time the user
-    // is inside the form.
     if (pendingSaveTimeout.current) {
       clearTimeout(pendingSaveTimeout.current);
     }
     pendingSaveTimeout.current = setTimeout(async () => {
       pendingSaveTimeout.current = null;
-      // Save to Firestore while isUserEditing is still true so no
-      // concurrent snapshot can overwrite while we are mid-flight.
       await saveCurrentFormDataToDisplayed();
-      // Only release the guard AFTER the save is committed.
       isUserEditing.current = false;
     }, 300);
   };
@@ -1227,7 +1091,6 @@ const App = () => {
       const updated = [...prev];
       const [moved] = updated.splice(fromIndex, 1);
       updated.splice(toIndex, 0, moved);
-      // Save new order to Firestore immediately
       saveOrderToFirestore({
         id: activeOrderId,
         header: { ...headerInfo },
@@ -1269,27 +1132,11 @@ const App = () => {
 
   const formatDateToSpanish = (dateString) => {
     const months = [
-      "Enero",
-      "Febrero",
-      "Marzo",
-      "Abril",
-      "Mayo",
-      "Junio",
-      "Julio",
-      "Agosto",
-      "Septiembre",
-      "Octubre",
-      "Noviembre",
-      "Diciembre",
+      "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+      "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
     ];
     const daysOfWeek = [
-      "Domingo",
-      "Lunes",
-      "Martes",
-      "Miércoles",
-      "Jueves",
-      "Viernes",
-      "Sábado",
+      "Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado",
     ];
     try {
       const date = new Date(dateString + "T00:00:00");
@@ -1306,41 +1153,6 @@ const App = () => {
     }
   };
 
-  // ─── EMAIL HTML GENERATOR ────────────────────────────────────────────────────
-  // Generates a single order block as a self-contained HTML string.
-  //
-  // DESIGN PRINCIPLES for cross-client compatibility:
-  //  1. Zero class references — every style is 100% inline on the element itself.
-  //     Outlook Desktop strips <style> blocks when pasting; inline styles survive.
-  //  2. Explicit font-family on every text element — Outlook resets inherited fonts.
-  //  3. No shorthand borders on <table> — use border-collapse + per-cell borders.
-  //  4. No CSS variables, no calc(), no flexbox inside the table — not supported
-  //     in Outlook's Word rendering engine (used by Outlook Desktop on Windows).
-  //  5. All colours are hex — Outlook 2016 ignores rgba/hsl.
-  //  6. mso-padding-alt / mso-line-height-rule omitted intentionally (not needed
-  //     here) but the structure is already compatible with the Word engine.
-  // ─────────────────────────────────────────────────────────────────────────────
-  // ─── EMAIL HTML GENERATOR ────────────────────────────────────────────────────
-  // Visual design: matches exactly the published version (screenshot reference)
-  //   • Outer card: white bg, 1px #dddddd border, 8px border-radius, 15px padding
-  //   • Header section: País/Nave/Fecha/Exporta in 13px Arial, separated by a
-  //     1px #eeeeee bottom border
-  //   • Table: blue (#2563eb) header row, alternating #f9f9f9/#ffffff body rows,
-  //     light gray (#f0f0f0) total row — all with 1px #dddddd cell borders
-  //   • Observaciones: 13px bold label + italic value
-  //
-  // Cross-client compatibility (Outlook Desktop / Outlook Web / Gmail / Apple Mail):
-  //   • Every style is 100% inline — no <style> block (Outlook Desktop strips them)
-  //   • Explicit font-family on every element (Outlook resets inherited fonts)
-  //   • table width:100% + table-layout:fixed → fills container on all clients
-  //   • mso-table-lspace/rspace:0pt → removes Outlook's default table spacing
-  //   • Conditional comments <!--[if mso]> → tells Outlook's Word engine exactly
-  //     how to render the outer wrapper (which ignores border-radius anyway)
-  //   • No overflow:hidden wrappers (Outlook Desktop clips content inside them)
-  //   • All colors are 6-digit hex (Outlook 2016 ignores rgba/hsl)
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Escape user-supplied strings before inserting them into HTML templates.
-  // This prevents stored XSS if a user types HTML/script tags in a field.
   const escapeHtml = (str) => {
     if (str === null || str === undefined) return "";
     return String(str)
@@ -1349,30 +1161,6 @@ const App = () => {
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
-  };
-
-  // Renders a price string like "$15,00 – $16,00 – $17,00" as inline HTML chips.
-  // Splits on common separators (–, -, /) and wraps each value in a small pill.
-  const renderPriceChips = (priceStr, isCanceled = false) => {
-    if (!priceStr || !priceStr.trim()) return "";
-    const chips = priceStr
-      .split(/\s*[\u2013\u2014\-\/]\s*/)
-      .map(p => p.trim())
-      .filter(Boolean);
-    if (chips.length === 0) return escapeHtml(priceStr);
-    const chipStyle =
-      "display:inline-block;" +
-      "background-color:#dbeafe;" +
-      "color:#1e40af;" +
-      "font-family:Arial,sans-serif;" +
-      "font-size:10px;" +
-      "font-weight:bold;" +
-      "padding:2px 6px;" +
-      "border-radius:10px;" +
-      "margin:2px 2px;" +
-      "white-space:nowrap;" +
-      (isCanceled ? "text-decoration:line-through;color:#ef4444;background-color:#fee2e2;" : "");
-    return chips.map(c => `<span style="${chipStyle}">${escapeHtml(c)}</span>`).join("");
   };
 
   const generateSingleOrderHtml = (
@@ -1407,64 +1195,36 @@ const App = () => {
       ? "opacity:0.6;text-decoration:line-through;"
       : "";
 
-    // ── Styles ───────────────────────────────────────────────────────────────
-    // <p> inside the header section
     const pStyle     = "margin:0;margin-bottom:3px;font-family:Arial,sans-serif;font-size:13px;color:#333333;line-height:1.5;";
     const pLastStyle = "margin:0;font-family:Arial,sans-serif;font-size:13px;color:#333333;line-height:1.5;";
 
-    // Table <th> — blue header matching the published version
-    // Pixel widths on <th> are the only reliable way to control column widths
-    // across Gmail, New Outlook (WebKit) and classic Outlook (Word renderer).
-    // Compact email table: total ~420px, font 10px, padding tight.
-    // Widths in px on <th> are the only cross-client reliable sizing method
-    // (Gmail, New Outlook/WebKit, Outlook Desktop/Word all respect them).
-    // Breakdown: 44+62+62+56+44+76+120 = 464px
-    const thBase =
-      "font-family:Arial,sans-serif;font-size:10px;font-weight:bold;color:#ffffff;" +
-      "background-color:#2563eb;padding:3px 8px;" +
+    const thStyle =
+      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#ffffff;" +
+      "background-color:#2563eb;padding:4px 6px;" +
       "border-top:1px solid #1e40af;border-bottom:1px solid #1e40af;" +
       "border-left:1px solid #1e40af;border-right:1px solid #1e40af;" +
       "text-align:center;white-space:nowrap;vertical-align:middle;";
-    const thStyle     = thBase;
-    const thPallets   = thBase;
-    const thEspecie   = thBase;
-    const thVariedad  = thBase;
-    const thFormato   = thBase;
-    const thCalibre   = thBase;
-    const thCategoria = thBase;
-    // Precios: min-width so multi-value ranges have room to wrap gracefully
-    const thPrecios   = thBase + "min-width:100px;word-wrap:break-word;white-space:normal;";
 
-    // Table <td> base — matching compact sizing
     const tdBase =
-      "font-family:Arial,sans-serif;font-size:10px;color:#333333;" +
-      "padding:3px 8px;text-align:center;white-space:nowrap;vertical-align:middle;" +
-      "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
-      "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
-    // Precios column: allow wrapping so long ranges never overflow
-    const tdPrecios =
-      "font-family:Arial,sans-serif;font-size:10px;color:#333333;" +
-      "padding:3px 8px;text-align:center;white-space:normal;word-wrap:break-word;vertical-align:middle;" +
+      "font-family:Arial,sans-serif;font-size:11px;color:#333333;" +
+      "padding:4px 6px;text-align:center;white-space:nowrap;vertical-align:middle;" +
       "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
       "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
 
-
-    // Total row — light gray, compact to match table
     const tdTotalLabel =
-      "font-family:Arial,sans-serif;font-size:10px;font-weight:bold;color:#333333;" +
-      "background-color:#f0f0f0;padding:3px 12px 3px 8px;text-align:right;" +
+      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;" +
+      "background-color:#f0f0f0;padding:5px 12px 5px 6px;text-align:right;" +
       "white-space:nowrap;vertical-align:middle;" +
       "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
       "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
 
     const tdTotalValue =
-      "font-family:Arial,sans-serif;font-size:10px;font-weight:bold;color:#333333;" +
-      "background-color:#f0f0f0;padding:3px 8px;text-align:center;" +
+      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;" +
+      "background-color:#f0f0f0;padding:5px 6px;text-align:center;" +
       "white-space:nowrap;vertical-align:middle;" +
       "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
       "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
 
-    // ── Data rows ─────────────────────────────────────────────────────────────
     const dataRowsHtml = orderItemsData
       .map((item, idx) => {
         const rowBg = idx % 2 === 0 ? "#f9f9f9" : "#ffffff";
@@ -1472,7 +1232,6 @@ const App = () => {
           ? "color:#ef4444;text-decoration:line-through;"
           : "";
         const td = tdBase + `background-color:${rowBg};` + cancelExtra;
-        const tdP = tdPrecios + `background-color:${rowBg};` + cancelExtra;
         return (
           `<tr style="background-color:${rowBg};">` +
           `<td style="${td}">${escapeHtml(item.pallets    || "")}</td>` +
@@ -1481,19 +1240,16 @@ const App = () => {
           `<td style="${td}">${escapeHtml(item.formato    || "")}</td>` +
           `<td style="${td}">${escapeHtml(item.calibre    || "")}</td>` +
           `<td style="${td}">${escapeHtml(item.categoria  || "")}</td>` +
-          `<td style="${tdP}">${escapeHtml(item.preciosFOB || "")}</td>` +
+          `<td style="${td}">${escapeHtml(item.preciosFOB || "")}</td>` +
           `</tr>`
         );
       })
       .join("");
 
-    // ── HTML output ───────────────────────────────────────────────────────────
-    // The outer <!--[if mso]> wrapper forces Outlook Desktop to allocate 100% width
-    // for the card div (Outlook ignores max-width on divs without this hint).
-    // Modern clients (Gmail, Apple Mail, Outlook Web) use the div directly.
     return `
-<!--[if mso]><table width="auto" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;"><tr><td style="padding:0;"><![endif]-->
-<div style="font-family:Arial,sans-serif;font-size:14px;color:#333333;margin-bottom:20px;background-color:#ffffff;border:1px solid #dddddd;border-radius:8px;padding:15px;display:inline-block;width:auto;text-align:left;box-sizing:border-box;${orderBlockExtra}">
+<tr>
+<td style="padding-bottom:80px;${orderBlockExtra}">
+<div style="font-family:Arial,sans-serif;font-size:14px;color:#333333;background-color:#ffffff;border:1px solid #dddddd;border-radius:8px;padding:15px;text-align:left;box-sizing:border-box;">
 
   <div style="padding-bottom:10px;margin-bottom:12px;">
     <p style="${pStyle}"><strong style="font-weight:bold;">País:</strong> ${formattedPais}</p>
@@ -1503,16 +1259,16 @@ const App = () => {
   </div>
 
   <table cellpadding="0" cellspacing="0" border="0"
-    style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;width:auto;table-layout:auto;margin-top:8px;">
+    style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;width:100%;table-layout:auto;margin-top:8px;">
     <thead>
       <tr style="background-color:#2563eb;">
-        <th style="${thPallets}">Pallets</th>
-        <th style="${thEspecie}">Especie</th>
-        <th style="${thVariedad}">Variedad</th>
-        <th style="${thFormato}">Formato</th>
-        <th style="${thCalibre}">Calibre</th>
-        <th style="${thCategoria}">Categoría</th>
-        <th style="${thPrecios}">Precios ${incotermLabel}</th>
+        <th style="${thStyle}">Pallets</th>
+        <th style="${thStyle}">Especie</th>
+        <th style="${thStyle}">Variedad</th>
+        <th style="${thStyle}">Formato</th>
+        <th style="${thStyle}">Calibre</th>
+        <th style="${thStyle}">Categoría</th>
+        <th style="${thStyle}">Precios ${incotermLabel}</th>
       </tr>
     </thead>
     <tbody>
@@ -1529,33 +1285,16 @@ const App = () => {
   </p>
 
 </div>
-<!--[if mso]></td></tr></table><![endif]-->`;
+</td>
+</tr>`;
   };
 
-  // ─── CLIPBOARD HELPER ────────────────────────────────────────────────────────
-  // Uses the modern Clipboard API (navigator.clipboard.write) which writes the
-  // HTML string directly as a text/html Blob — bypassing the DOM entirely.
-  // This guarantees the exact same HTML lands in Outlook Desktop, Outlook Web,
-  // Mail on Mac, and every other client, regardless of OS or browser.
-  //
-  // Fallback chain (for older browsers / non-HTTPS / Safari quirks):
-  //   1. navigator.clipboard.write  → modern, direct, no DOM rendering needed
-  //   2. navigator.clipboard.writeText → copies plain HTML as text (last resort)
-  //   3. execCommand('copy')         → legacy DOM selection method (original code)
-  //
-  // The plain-text fallback intentionally copies the raw HTML string so the user
-  // at least has the content — they can paste it in a text editor to inspect it.
-  // ─────────────────────────────────────────────────────────────────────────────
   const copyFormattedContentToClipboard = async (content) => {
-    // Strategy 1: Modern Clipboard API — writes HTML Blob directly, no DOM needed.
-    // Supported: Chrome 76+, Edge 79+, Firefox 87+ (requires HTTPS or localhost).
     if (navigator.clipboard && window.ClipboardItem) {
       try {
         await navigator.clipboard.write([
           new ClipboardItem({
-            // The HTML MIME type tells Outlook/Mail to paste as rich text, not plain text.
             "text/html": new Blob([content], { type: "text/html" }),
-            // Always include a plain-text fallback so paste still works in plain-text fields.
             "text/plain": new Blob([content], { type: "text/plain" }),
           }),
         ]);
@@ -1564,12 +1303,9 @@ const App = () => {
       }
     }
 
-    // Strategy 2: execCommand('copy') — legacy DOM selection method.
-    // Less reliable across OS/browser combinations but still works in most cases.
     try {
       const tempDiv = document.createElement("div");
       tempDiv.innerHTML = content;
-      // Position off-screen but still in the document so it can be selected.
       tempDiv.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0;pointer-events:none;";
       document.body.appendChild(tempDiv);
 
@@ -1589,7 +1325,6 @@ const App = () => {
     } catch (err) {
     }
 
-    // Strategy 3: Plain-text fallback — at minimum the user gets the raw HTML.
     try {
       await navigator.clipboard.writeText(content);
     } catch (err) {
@@ -1597,9 +1332,7 @@ const App = () => {
   };
 
   const handleAddOrder = async () => {
-    if (!db || !userId) {
-      return;
-    }
+    if (!db || !userId) return;
 
     if (activeOrderId) {
       await saveCurrentFormDataToDisplayed();
@@ -1612,17 +1345,11 @@ const App = () => {
       if (headerInfo.mailId && headerInfo.status === "draft") {
         mailIdToAssignForNewOrder = headerInfo.mailId;
       } else {
-        mailIdToAssignForNewOrder = crypto
-          .randomUUID()
-          .substring(0, 8)
-          .toUpperCase();
+        mailIdToAssignForNewOrder = crypto.randomUUID().substring(0, 8).toUpperCase();
       }
     }
 
-    const ordersCollectionRef = collection(
-      db,
-      `artifacts/${appId}/public/data/pedidos`
-    );
+    const ordersCollectionRef = collection(db, `artifacts/${appId}/public/data/pedidos`);
     const newOrderDocRef = doc(ordersCollectionRef);
     const newOrderId = newOrderDocRef.id;
 
@@ -1649,74 +1376,90 @@ const App = () => {
       items: newBlankItems,
     });
 
+    const newOrder = { id: newOrderId, header: newBlankHeader, items: newBlankItems };
+    setDisplayedOrders((prev) => {
+      const updated = [...prev, newOrder];
+      setCurrentOrderIndex(updated.length - 1);
+      return updated;
+    });
     setActiveOrderId(newOrderId);
+    setHeaderInfo(newBlankHeader);
+    setOrderItems(newBlankItems);
   };
 
-  const handlePreviousOrder = () => {
+  const handlePreviousOrder = async () => {
+    if (currentOrderIndex === 0) return;
 
-    if (currentOrderIndex === 0) {
-      return;
-    }
-
-    // Cancel any pending blur-triggered save; navigation save covers it
     if (pendingSaveTimeout.current) {
       clearTimeout(pendingSaveTimeout.current);
       pendingSaveTimeout.current = null;
     }
     isUserEditing.current = false;
 
-    saveCurrentFormDataToDisplayed();
+    await saveCurrentFormDataToDisplayed();
 
     const newIndex = currentOrderIndex - 1;
-    if (displayedOrders[newIndex]) {
-      const nextActiveId = displayedOrders[newIndex].id;
-      setActiveOrderId(nextActiveId);
-    } else {
+    const target = displayedOrders[newIndex];
+    if (target) {
+      setActiveOrderId(target.id);
+      setHeaderInfo(target.header);
+      setOrderItems(target.items);
+      setCurrentOrderIndex(newIndex);
     }
   };
 
-  const handleNextOrder = () => {
+  const handleNextOrder = async () => {
+    if (currentOrderIndex === displayedOrders.length - 1) return;
 
-    if (currentOrderIndex === displayedOrders.length - 1) {
-      return;
-    }
-
-    // Cancel any pending blur-triggered save; navigation save covers it
     if (pendingSaveTimeout.current) {
       clearTimeout(pendingSaveTimeout.current);
       pendingSaveTimeout.current = null;
     }
     isUserEditing.current = false;
 
-    saveCurrentFormDataToDisplayed();
+    await saveCurrentFormDataToDisplayed();
 
     const newIndex = currentOrderIndex + 1;
-    if (displayedOrders[newIndex]) {
-      const nextActiveId = displayedOrders[newIndex].id;
-      setActiveOrderId(nextActiveId);
-    } else {
+    const target = displayedOrders[newIndex];
+    if (target) {
+      setActiveOrderId(target.id);
+      setHeaderInfo(target.header);
+      setOrderItems(target.items);
+      setCurrentOrderIndex(newIndex);
     }
   };
 
   const handleDeleteCurrentOrder = async () => {
     try {
-      await saveCurrentFormDataToDisplayed();
-
-      if (displayedOrders.length <= 1) {
-        return;
-      }
-
+      if (displayedOrders.length <= 1) return;
 
       const orderIdToSoftDelete = displayedOrders[currentOrderIndex].id;
-
       await handleSoftDeleteOrderInFirestore(orderIdToSoftDelete);
+
+      const updated = displayedOrders.filter((o) => o.id !== orderIdToSoftDelete);
+      setDisplayedOrders(updated);
+
+      const newIndex = Math.min(currentOrderIndex, updated.length - 1);
+      const target = updated[newIndex];
+      if (target) {
+        setActiveOrderId(target.id);
+        setHeaderInfo(target.header);
+        setOrderItems(target.items);
+        setCurrentOrderIndex(newIndex);
+      } else {
+        await loadMyDrafts();
+      }
     } catch (error) {
     }
   };
 
   const handleSearchClick = async () => {
-    const term = searchTerm.toUpperCase();
+    const term = searchTerm.toUpperCase().trim();
     if (!term) return;
+
+    if (activeOrderId) {
+      await saveCurrentFormDataToDisplayed();
+    }
 
     const conflicts = await checkPresenceConflict(term);
     if (conflicts.length > 0) {
@@ -1740,10 +1483,11 @@ const App = () => {
     await writePresence(term);
     subscribeToPresence(term);
     setCommittedSearchTerm(term);
+
+    await searchByMailId(term);
   };
 
   const handleClearSearch = async () => {
-
     if (activeOrderId) {
       await saveCurrentFormDataToDisplayed();
     }
@@ -1760,6 +1504,8 @@ const App = () => {
 
     setSearchTerm("");
     setCommittedSearchTerm("");
+
+    await loadMyDrafts();
   };
 
   const isMobileDevice = () => {
@@ -1771,7 +1517,6 @@ const App = () => {
       if (!db || !userId) {
         return;
       }
-
       await saveCurrentFormDataToDisplayed();
 
       const mailGlobalId = headerInfo.mailId;
@@ -1799,6 +1544,12 @@ const App = () => {
         ordersToGroupSnapshot.docs.forEach((docSnapshot) => {
           const orderData = docSnapshot.data();
           const existingMailId = orderData.header?.mailId;
+          const docCreatedBy = orderData.header?.createdBy;
+
+          if (docCreatedBy !== userId) {
+            return;
+          }
+
           if (!existingMailId || existingMailId !== mailGlobalId) {
             const orderRef = doc(
               db,
@@ -1811,11 +1562,8 @@ const App = () => {
 
         if (batch._mutations.length > 0) {
           await batch.commit();
-        } else {
         }
-      } else {
       }
-
       const q = query(
         ordersCollectionRef,
         where("header.mailId", "==", mailGlobalId)
@@ -1860,7 +1608,6 @@ const App = () => {
         const dateB = b.header?.createdAt || 0;
         return dateA - dateB;
       });
-
       for (const order of ordersToProcess) {
         if (order.header?.status === "draft") {
           const orderDocRef = doc(
@@ -1894,9 +1641,11 @@ const App = () => {
 
       ordersToProcess.forEach((order, index) => {
         innerEmailContentHtml += `
-            <h3 style="font-size: 18px; color: #2563eb; margin-top: 40px; margin-bottom: 15px; text-align: left;">Pedido #${
-              index + 1
-            }</h3>
+            <tr>
+              <td style="padding-bottom:8px;">
+                <h3 style="margin:0;font-size:16px;color:#2563eb;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
+              </td>
+            </tr>
             ${generateSingleOrderHtml(order.header, order.items, index + 1)}
         `;
 
@@ -1913,8 +1662,6 @@ const App = () => {
         ""
       );
 
-      // All styles are 100% inline inside generateSingleOrderHtml.
-      // No <style> block — Outlook Desktop strips stylesheet blocks on paste.
       const fullEmailBodyHtml = `<!DOCTYPE html>
 <html>
 <head>
@@ -1923,10 +1670,10 @@ const App = () => {
   <title>Detalle de Pedido</title>
 </head>
 <body style="margin:0;padding:16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
-  <div style="text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">
-    Mail ID: ${mailGlobalId}
-  </div>
-  ${innerEmailContentHtml}
+  <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${mailGlobalId}</div>
+  <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:auto;">
+    ${innerEmailContentHtml}
+  </table>
 </body>
 </html>`;
 
@@ -1936,20 +1683,14 @@ const App = () => {
       openEmailClient(consolidatedSubject);
 
       setShowOrderActionsModal(false);
+      setSearchTerm("");
+      setCommittedSearchTerm("");
       setEmailActionTriggered(false);
       setIsShowingPreview(false);
       setPreviewHtmlContent("");
-      setSearchTerm("");
-      setCommittedSearchTerm("");
 
-      // Reset local UI to blank immediately so the form looks clean.
-      // Do NOT create a new draft here — onSnapshot is the single source of truth
-      // for draft creation. It will detect that the active order is no longer a
-      // draft and create a fresh one automatically.
-      setHeaderInfo({ ...initialHeaderState, emailSubject: generateEmailSubjectValue([], []) });
-      setOrderItems([{ ...initialItemState, id: crypto.randomUUID() }]);
-      setCurrentOrderIndex(0);
-      setActiveOrderId(null);
+      // v17: recargar drafts + historial de sent tras el envío
+      await loadMyDrafts();
     } catch (error) {
     }
   };
@@ -1985,6 +1726,10 @@ const App = () => {
       ordersToGroupSnapshot.docs.forEach((docSnapshot) => {
         const orderData = docSnapshot.data();
         const existingMailId = orderData.header?.mailId;
+        const docCreatedBy = orderData.header?.createdBy;
+
+        if (docCreatedBy !== userId) return;
+
         if (!existingMailId || existingMailId !== previewGlobalId) {
           const orderRef = doc(
             db,
@@ -1997,9 +1742,7 @@ const App = () => {
 
       if (batch._mutations.length > 0) {
         await batch.commit();
-      } else {
       }
-    } else {
     }
 
     const q = query(
@@ -2055,14 +1798,15 @@ const App = () => {
       let innerPreviewHtml = "";
       ordersForPreview.forEach((order, index) => {
         innerPreviewHtml += `
-          <h3 style="font-size: 18px; color: #2563eb; margin-top: 20px; margin-bottom: 10px; text-align: left;">Pedido #${
-            index + 1
-          }</h3>
-          ${generateSingleOrderHtml(order.header, order.items, index + 1)}
+            <tr>
+              <td style="padding-bottom:8px;">
+                <h3 style="margin:0;font-size:16px;color:#2563eb;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
+              </td>
+            </tr>
+            ${generateSingleOrderHtml(order.header, order.items, index + 1)}
         `;
       });
 
-      // All styles are 100% inline — no <style> block needed.
       const finalPreviewHtml = `<!DOCTYPE html>
 <html>
 <head>
@@ -2071,10 +1815,10 @@ const App = () => {
   <title>Previsualización de Pedido</title>
 </head>
 <body style="margin:0;padding:16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
-  <div style="text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">
-    Mail ID: ${previewGlobalId}
-  </div>
-  ${innerPreviewHtml}
+  <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${previewGlobalId}</div>
+  <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:auto;">
+    ${innerPreviewHtml}
+  </table>
 </body>
 </html>`;
       setPreviewHtmlContent(finalPreviewHtml);
@@ -2088,7 +1832,6 @@ const App = () => {
     if (!headerInfo.mailId) {
       mailIdToAssign = crypto.randomUUID().substring(0, 8).toUpperCase();
       setHeaderInfo((prev) => ({ ...prev, mailId: mailIdToAssign }));
-    } else {
     }
 
     await saveCurrentFormDataToDisplayed();
@@ -2294,7 +2037,7 @@ const App = () => {
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, []); // stable: reads orderItems via orderItemsRef, uses only refs for DOM
+  }, []);
 
   if (isLoading) {
     return (
@@ -2308,19 +2051,12 @@ const App = () => {
 
   const currentOrderIsDeleted = headerInfo.status === "deleted";
 
-
   return (
     <div className="min-h-screen bg-gray-100 p-4 sm:p-6 lg:p-8 font-inter">
       <div className="max-w-4xl mx-auto bg-white rounded-xl shadow-lg p-4 sm:p-6 space-y-6 relative">
 
-        {/* ── TOP-RIGHT TOOLBAR ──────────────────────────────────────────────────
-             All three elements (config gear, history clock, logo) live in a
-             single flex container anchored to the top-right corner.
-             This prevents the overlapping caused by independent absolute offsets.
-        ──────────────────────────────────────────────────────────────────────── */}
         <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
 
-          {/* Config gear button — email client preference */}
           <button
             onClick={() => setShowConfigPanel(true)}
             className="p-1.5 rounded-full bg-white border border-gray-200 shadow-sm hover:bg-gray-50 hover:border-gray-400 transition-colors"
@@ -2332,7 +2068,6 @@ const App = () => {
             </svg>
           </button>
 
-          {/* History clock button — only shown when there are sent orders */}
           {sentHistory.length > 0 && (
             <button
               onClick={() => setShowHistoryPanel(true)}
@@ -2348,7 +2083,6 @@ const App = () => {
             </button>
           )}
 
-          {/* Logo VPC */}
           <img
             src="https://www.vpcom.com/images/logo-vpc.png"
             onError={(e) => {
@@ -2361,7 +2095,6 @@ const App = () => {
           />
         </div>
 
-        {/* Display persistent user identity */}
         {userId && (
           <div className="absolute top-4 left-4 text-xs text-gray-500 flex items-center gap-2">
             <span title={`ID: ${userId}`}>
@@ -2381,11 +2114,10 @@ const App = () => {
           </div>
         )}
 
-        <div className="pb-4 mb-4 pt-16 sm:pt-0">
+        <div className="border-b pb-4 mb-4 pt-16 sm:pt-0">
           <h1 className="text-xl sm:text-2xl font-bold text-center text-gray-800 mb-4">
             Pedidos Comercial Frutam
           </h1>
-          {/* Search Input and Buttons */}
           <div className="flex items-end gap-2 mb-4">
             <div className="flex-grow">
               <label
@@ -2418,7 +2150,6 @@ const App = () => {
             </button>
           </div>
 
-          {/* ── LAST SEND RECOVERY BANNER ─────────────────────────────────────── */}
           {lastSendData && !lastSendData.confirmed && (
             <div className="flex items-center justify-between gap-2 px-4 py-2 mb-2 bg-blue-50 border border-blue-200 rounded-lg text-blue-800 text-sm">
               <div className="flex items-center gap-2">
@@ -2449,7 +2180,6 @@ const App = () => {
             </div>
           )}
 
-          {/* Presence warning banner */}
           {otherUsersPresent.length > 0 && committedSearchTerm && (
             <div className="flex items-center gap-2 px-4 py-2 mb-2 bg-yellow-50 border border-yellow-300 rounded-lg text-yellow-800 text-sm">
               <span className="text-lg">⚠️</span>
@@ -2466,7 +2196,6 @@ const App = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
             <div>
-              {/* Incoterm selector sits inline to the right of the supplier label */}
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-sm font-medium text-gray-700">
                   Nombre de Proveedor:
@@ -2581,7 +2310,6 @@ const App = () => {
           </div>
         </div>
 
-        {/* Navigation Buttons and Order Indicator */}
         <div className="flex flex-col sm:flex-row justify-center items-center gap-4 mt-4 mb-6">
           <div className="flex items-center justify-center w-full sm:w-auto">
             <button
@@ -2590,17 +2318,8 @@ const App = () => {
               className="flex items-center justify-center px-3 py-2 bg-gray-300 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:ring-offset-2 transition duration-150 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
               title="Ir al pedido anterior (más antiguo)"
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-5 w-5"
-                viewBox="0 0 20 20"
-                fill="currentColor"
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M9.707 4.293a1 1 0 010 1.414L5.414 10l4.293 4.293a1 1 0 01-1.414 1.414l-5-5a1 1 0 010-1.414l5-5a1 1 0 011.414 0z"
-                  clipRule="evenodd"
-                />
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M9.707 4.293a1 1 0 010 1.414L5.414 10l4.293 4.293a1 1 0 01-1.414 1.414l-5-5a1 1 0 010-1.414l5-5a1 1 0 011.414 0z" clipRule="evenodd" />
               </svg>
               <span className="hidden sm:inline ml-1">Anterior</span>
             </button>
@@ -2619,17 +2338,8 @@ const App = () => {
               title="Ir al siguiente pedido (más reciente)"
             >
               <span className="hidden sm:inline mr-1">Siguiente</span>
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-5 w-5"
-                viewBox="0 0 20 20"
-                fill="currentColor"
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M10.293 15.707a1 1 0 010-1.414L14.586 10l-4.293-4.293a1 1 0 111.414-1.414l5 5a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0z"
-                  clipRule="evenodd"
-                />
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10.293 15.707a1 1 0 010-1.414L14.586 10l-4.293-4.293a1 1 0 111.414-1.414l5 5a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0z" clipRule="evenodd" />
               </svg>
             </button>
           </div>
@@ -2643,7 +2353,6 @@ const App = () => {
         ) : (
           <>
             <div className="overflow-x-auto rounded-lg shadow-md">
-              {/* Table for desktop view */}
               <table className="min-w-full divide-y divide-gray-200 hidden md:table">
                 <thead className="bg-blue-600 text-white">
                   <tr style={{ backgroundColor: "#2563eb", color: "#ffffff" }}>
@@ -2858,13 +2567,12 @@ const App = () => {
                     </tr>
                   ))}
                   <tr style={{ backgroundColor: "#e0e0e0" }}>
-                    <td colSpan="7" style={{ padding: "6px 15px 6px 6px", textAlign: "right", fontWeight: "bold", border: "1px solid #ccc", borderBottomLeftRadius: "8px", marginTop: "15px" }}>
+                    <td colSpan="6" style={{ padding: "6px 15px 6px 6px", textAlign: "right", fontWeight: "bold", border: "1px solid #ccc", borderBottomLeftRadius: "8px", marginTop: "15px" }}>
                       Total de Pallets:
                     </td>
-                    <td colSpan="1" style={{ padding: "6px", fontWeight: "bold", border: "1px solid #ccc", textAlign: "center" }}>
+                    <td colSpan="1" style={{ padding: "6px", fontWeight: "bold", border: "1px solid #ccc", borderBottomRightRadius: "8px", textAlign: "center" }}>
                       {currentOrderTotalPallets} Pallets
                     </td>
-                    <td style={{ backgroundColor: "#e0e0e0", border: "none" }}></td>
                   </tr>
                 </tbody>
               </table>
@@ -3050,8 +2758,12 @@ const App = () => {
                   <h3 className="text-lg font-semibold mb-3 text-gray-800 text-center">
                     Previsualización del Pedido
                   </h3>
-                  <div className="bg-gray-50 p-4 rounded-md border border-gray-200 text-left flex-grow overflow-y-auto">
-                    <div dangerouslySetInnerHTML={{ __html: previewHtmlContent }} />
+                  <div className="bg-gray-50 rounded-md border border-gray-200 flex-grow overflow-hidden" style={{minHeight: "300px"}}>
+                    <iframe
+                      srcDoc={previewHtmlContent}
+                      style={{width:"100%", height:"100%", minHeight:"360px", border:"none", display:"block"}}
+                      title="Previsualización del pedido"
+                    />
                   </div>
                   <div className="flex justify-center mt-3 gap-2 flex-wrap sm:flex-nowrap">
                     <button
@@ -3205,7 +2917,6 @@ const App = () => {
           </div>
         )}
 
-        {/* Datalist for apple varieties */}
         <datalist id="apple-varieties">
           <option value="GALA" />
           <option value="GRANNY" />
@@ -3260,7 +2971,7 @@ const App = () => {
                         {entry.orders[0]?.header?.reDestinatarios ? ` · ${entry.orders[0].header.reDestinatarios}` : ""}
                       </div>
                       <div className="flex gap-2 pt-1">
-                        <button onClick={() => { setShowHistoryPanel(false); setSearchTerm(entry.mailId); setCommittedSearchTerm(entry.mailId); }} className="flex-1 px-3 py-1.5 text-xs font-semibold bg-white border border-gray-200 text-gray-700 rounded-md hover:bg-gray-100 transition">
+                        <button onClick={async () => { setShowHistoryPanel(false); setSearchTerm(entry.mailId); setCommittedSearchTerm(entry.mailId); await enterMailId(entry.mailId); }} className="flex-1 px-3 py-1.5 text-xs font-semibold bg-white border border-gray-200 text-gray-700 rounded-md hover:bg-gray-100 transition">
                           Ver pedido
                         </button>
                         <button onClick={() => resendFromHistory(entry.mailId)} disabled={historyResendingId === entry.mailId} className="flex-1 px-3 py-1.5 text-xs font-semibold bg-blue-600 text-white rounded-md hover:bg-blue-700 transition disabled:opacity-50 flex items-center justify-center gap-1">
@@ -3351,7 +3062,7 @@ const App = () => {
         whiteSpace: "nowrap",
         zIndex: 10,
       }}>
-        v15 · 03 Mar 2026
+        v17.2 · 04 Mar 2026
       </div>
     </div>
   );

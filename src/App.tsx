@@ -345,38 +345,61 @@ const App = () => {
 
   // Firebase Initialization and Authentication Effect
   useEffect(() => {
+    // ── v22 FIX (memory leak): Previously `return () => unsubscribe()` was
+    // inside the async initAuth() function. useEffect ignores return values
+    // from async functions (they return Promises, not cleanup functions).
+    // The onAuthStateChanged listener was therefore NEVER unsubscribed.
+    // Fix: capture the unsubscribe ref outside the async block and return
+    // the cleanup directly to useEffect.
+    let unsubscribeAuth = null;
+
     const initAuth = async () => {
       try {
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
-          if (user) {
-            setUserId(user.uid);
-            setIsAuthReady(true);
-          } else {
-            try {
-              if (
-                typeof __initial_auth_token !== "undefined" &&
-                __initial_auth_token
-              ) {
-                await signInWithCustomToken(auth, __initial_auth_token);
-              } else {
-                await signInAnonymously(auth);
-              }
-              setUserId(auth.currentUser?.uid ?? null);
-            } catch (anonError) {
-              setUserId(null);
-            } finally {
-              setIsAuthReady(true);
-            }
+        if (
+          typeof __initial_auth_token !== "undefined" &&
+          __initial_auth_token
+        ) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          // Sign in anonymously only if not already authenticated
+          if (!auth.currentUser) {
+            await signInAnonymously(auth);
           }
-        });
-
-        return () => unsubscribe();
+        }
       } catch (error) {
-        setIsAuthReady(true);
+        // Auth failure — will still attach the listener below
       }
     };
 
+    unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setUserId(user.uid);
+        setIsAuthReady(true);
+      } else {
+        try {
+          if (
+            typeof __initial_auth_token !== "undefined" &&
+            __initial_auth_token
+          ) {
+            await signInWithCustomToken(auth, __initial_auth_token);
+          } else {
+            await signInAnonymously(auth);
+          }
+          setUserId(auth.currentUser?.uid ?? null);
+        } catch (anonError) {
+          setUserId(null);
+        } finally {
+          setIsAuthReady(true);
+        }
+      }
+    });
+
     initAuth();
+
+    // This cleanup NOW reaches useEffect correctly
+    return () => {
+      if (unsubscribeAuth) unsubscribeAuth();
+    };
   }, []);
 
   const getCurrentWeekNumber = () => {
@@ -511,6 +534,13 @@ const App = () => {
   const [isShowingPreview, setIsShowingPreview] = useState(false);
   const [emailActionTriggered, setEmailActionTriggered] = useState(false);
 
+  // ── v22 FIX (setState after unmount): guard all async operations
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
+
   const [showObservationModal, setShowObservationModal] = useState(false);
   const [currentEditingItemData, setCurrentEditingItemData] = useState(null);
   const [modalObservationText, setModalObservationText] = useState("");
@@ -522,6 +552,11 @@ const App = () => {
   const pendingSaveTimeout = useRef(null);
   const orderItemsRef = useRef([]);
   orderItemsRef.current = orderItems;
+  // ── v20: headerInfo also needs a ref — it has the same stale-closure risk
+  // as orderItems. Any action function that fires synchronously after a blur
+  // must read from this ref instead of the closure value.
+  const headerInfoRef = useRef(headerInfo);
+  headerInfoRef.current = headerInfo;
   const activeOrderIdRef = useRef(null);
   activeOrderIdRef.current = activeOrderId;
 
@@ -702,26 +737,32 @@ const App = () => {
   }, [presenceMailId]);
 
   useEffect(() => {
+    // ── v22 FIX (unnecessary renders / infinite loop risk): Previously
+    // `headerInfo.emailSubject` was in the dependency array. The effect
+    // reads it to compare AND writes it via setHeaderInfo — any mismatch
+    // between the computed and stored value could cause a perpetual re-run.
+    // Fix: remove emailSubject from deps. The effect only needs to react to
+    // the inputs that feed the subject calculation (proveedor, especie, mailId).
     const currentProveedor = headerInfo.reDestinatarios;
     const currentEspecie = orderItems[0]?.especie || "";
 
-    const newSubjectForCurrentOrder = generateEmailSubjectValue(
+    const newSubject = generateEmailSubjectValue(
       [currentProveedor],
       [currentEspecie],
       headerInfo.mailId
     );
 
-    if (newSubjectForCurrentOrder !== headerInfo.emailSubject) {
-      setHeaderInfo((prevInfo) => ({
-        ...prevInfo,
-        emailSubject: newSubjectForCurrentOrder,
-      }));
-    }
+    // Use functional setter to compare against the truly-current value,
+    // avoiding a stale closure read of headerInfo.emailSubject
+    setHeaderInfo((prevInfo) => {
+      if (prevInfo.emailSubject === newSubject) return prevInfo; // no-op, no re-render
+      return { ...prevInfo, emailSubject: newSubject };
+    });
   }, [
     headerInfo.reDestinatarios,
     orderItems[0]?.especie,
-    headerInfo.emailSubject,
     headerInfo.mailId,
+    // emailSubject intentionally omitted — it is the OUTPUT, not an input
   ]);
 
   const parseFirestoreOrders = (docs) => {
@@ -744,20 +785,6 @@ const App = () => {
     return orders.sort((a, b) => (a.header?.createdAt || 0) - (b.header?.createdAt || 0));
   };
 
-  // ─── FIX: loadSentHistory ────────────────────────────────────────────────────
-  // loadMyDrafts solo consulta status="draft", por eso allOrdersFromFirestore
-  // nunca contenía pedidos "sent" y el useMemo de sentHistory siempre devolvía
-  // [] → el botón del historial nunca aparecía.
-  //
-  // Esta función hace una consulta puntual de los últimos pedidos enviados
-  // (status="sent", lastModifiedBy==userId) y los fusiona en
-  // allOrdersFromFirestore junto con los drafts actuales, de modo que el
-  // useMemo de sentHistory pueda encontrarlos.
-  //
-  // Se llama al final de loadMyDrafts() (después de cargar drafts) y también
-  // al final de performSendEmail() (para que el historial aparezca
-  // inmediatamente tras el primer envío de la sesión).
-  // ─────────────────────────────────────────────────────────────────────────────
   const loadSentHistory = async (currentDrafts = []) => {
     if (!db || !userId) return;
     try {
@@ -769,10 +796,9 @@ const App = () => {
       );
       const snapshot = await getDocs(q);
       const sentOrders = parseFirestoreOrders(snapshot.docs);
-      // Merge: drafts primero (son los activos en la UI), sent después (para el useMemo)
       setAllOrdersFromFirestore([...currentDrafts, ...sentOrders]);
     } catch (err) {
-      // No crítico — el historial simplemente no aparece. No bloquear la UI.
+      // No crítico
     }
   };
 
@@ -787,10 +813,11 @@ const App = () => {
         where("header.status", "==", "draft")
       );
       const snapshot = await getDocs(q);
+      // ── v22 FIX: guard against setState after unmount
+      if (!isMountedRef.current) return;
       const drafts = parseFirestoreOrders(snapshot.docs);
 
       if (drafts.length === 0) {
-        // No drafts — crear uno en blanco
         const newRef = doc(ordersCollectionRef);
         const newHeader = {
           ...initialHeaderState,
@@ -803,13 +830,13 @@ const App = () => {
         };
         const newItems = [{ ...initialItemState, id: crypto.randomUUID() }];
         await saveOrderToFirestore({ id: newRef.id, isNew: true, header: newHeader, items: newItems });
+        if (!isMountedRef.current) return;
         const newDraft = { id: newRef.id, header: newHeader, items: newItems };
         setDisplayedOrders([newDraft]);
         setActiveOrderId(newRef.id);
         setHeaderInfo(newHeader);
         setOrderItems(newItems);
         setCurrentOrderIndex(0);
-        // FIX: cargar historial de sent fusionado con el nuevo draft
         await loadSentHistory([newDraft]);
       } else {
         setDisplayedOrders(drafts);
@@ -818,13 +845,12 @@ const App = () => {
         setHeaderInfo(drafts[0].header);
         setOrderItems(drafts[0].items);
         setCurrentOrderIndex(0);
-        // FIX: cargar historial de sent fusionado con los drafts actuales
         await loadSentHistory(drafts);
       }
     } catch (err) {
       console.error("loadMyDrafts error:", err);
     } finally {
-      setIsLoading(false);
+      if (isMountedRef.current) setIsLoading(false);
     }
   };
 
@@ -838,13 +864,12 @@ const App = () => {
         where("header.mailId", "==", mailId)
       );
       const snapshot = await getDocs(q);
+      // ── v22 FIX: guard against setState after unmount
+      if (!isMountedRef.current) return;
       const orders = parseFirestoreOrders(snapshot.docs).filter(
         (o) => o.header?.status !== "deleted"
       );
 
-      // FIX: preservar los pedidos "sent" existentes en allOrdersFromFirestore
-      // cuando se entra en modo búsqueda, para que el botón del historial no
-      // desaparezca mientras el usuario revisa un mailId específico.
       setAllOrdersFromFirestore((prev) => {
         const sentOnly = prev.filter((o) => o.header?.status === "sent");
         return [...orders, ...sentOnly];
@@ -869,36 +894,72 @@ const App = () => {
     } catch (err) {
       console.error("searchByMailId error:", err);
     } finally {
-      setIsLoading(false);
+      if (isMountedRef.current) setIsLoading(false);
     }
   };
 
-  // Carga inicial — solo cuando auth está lista
   useEffect(() => {
     if (!isAuthReady || !userId) return;
     loadMyDrafts();
   }, [isAuthReady, userId]);
 
-  const saveCurrentFormDataToDisplayed = async () => {
-    if (!db || !userId || !activeOrderId) return;
+  // ── v20 ARCHITECTURE: Single flush helper used by ALL action functions.
+  // Reads from refs (always current) unless caller passes explicit overrides.
+  // The debounce-autosave also calls this with no arguments — it reads from
+  // refs too, so both paths are consistent.
+  const saveCurrentFormDataToDisplayed = async (
+    explicitHeader = null,
+    explicitItems = null
+  ) => {
+    if (!db || !userId || !activeOrderIdRef.current) return;
 
-    const isOwnOrder = !headerInfo.createdBy || headerInfo.createdBy === userId;
+    // Always read from refs — never from closures
+    const snapshotHeader = explicitHeader ?? headerInfoRef.current;
+    const snapshotItems  = explicitItems  ?? orderItemsRef.current;
+
+    // ── v23 FIX (collaborative model): The previous `isOwnOrder` check was
+    // blocking writes for documents created by other users, making the
+    // collaborative editing model non-functional. Any authenticated user who
+    // searches a mailID must be able to save edits to all its pedidos.
+    // The fields `createdBy` and `createdAt` remain protected via `skipFields`
+    // in saveOrderToFirestore — they can never be overwritten.
 
     const currentOrderData = {
-      id: activeOrderId,
-      header: { ...headerInfo },
-      items: orderItems.map((item) => ({ ...item })),
+      id: activeOrderIdRef.current,
+      header: { ...snapshotHeader },
+      items: snapshotItems.map((item) => ({ ...item })),
     };
 
     setDisplayedOrders((prev) =>
-      prev.map((o) => (o.id === activeOrderId ? { ...o, ...currentOrderData } : o))
+      prev.map((o) => (o.id === activeOrderIdRef.current ? { ...o, ...currentOrderData } : o))
     );
 
-    if (!isOwnOrder) {
-      return;
+    await saveOrderToFirestore(currentOrderData);
+  };
+
+  // ── v20: Central flush used by all action functions (navigate/send/preview/
+  // finalize/search). Cancels any pending debounce and immediately persists
+  // the current ref state to both displayedOrders and Firestore.
+  //
+  // ── v21: Forces blur on the currently focused element before reading refs.
+  // This ensures that if the user clicks an action button while a field still
+  // has focus (no blur has fired yet), the onBlur formatting handler runs
+  // and the formatted value is captured in the ref before we save.
+  const flushAndSave = async () => {
+    // Force blur so that any pending onBlur handlers (formatters) run
+    if (document.activeElement && document.activeElement !== document.body) {
+      document.activeElement.blur();
+      // Yield one microtask tick so that React processes the blur setState
+      // before we read from refs
+      await new Promise((r) => setTimeout(r, 0));
     }
 
-    await saveOrderToFirestore(currentOrderData);
+    if (pendingSaveTimeout.current) {
+      clearTimeout(pendingSaveTimeout.current);
+      pendingSaveTimeout.current = null;
+    }
+    isUserEditing.current = false;
+    await saveCurrentFormDataToDisplayed();
   };
 
   const handleHeaderChange = (e) => {
@@ -929,12 +990,29 @@ const App = () => {
     }
   };
 
+  // ── v20 ARCHITECTURE: The v19 fix introduced pendingItemsRef/pendingHeaderRef
+  // as a two-step intermediate. This added complexity without full coverage
+  // (headerInfo still had a stale closure risk in v19).
+  //
+  // The correct and complete solution is simpler:
+  //   • orderItemsRef.current  — always the freshest orderItems (synced above)
+  //   • headerInfoRef.current  — always the freshest headerInfo (synced above)
+  //
+  // All action functions (navigate, finalize, send, preview, search) read from
+  // these refs directly. No intermediate pending refs needed.
+  //
+  // The debounce-based autosave is KEPT but its only job is Firestore
+  // persistence during idle time. It is never relied upon for correctness —
+  // all critical paths flush explicitly before acting.
+
   const handleBlurField = (originalBlurFn) => (e) => {
     if (originalBlurFn) originalBlurFn(e);
 
     if (pendingSaveTimeout.current) {
       clearTimeout(pendingSaveTimeout.current);
     }
+    // Debounce only for idle Firestore persistence. Action functions do NOT
+    // wait for this — they read from refs directly (see flushAndSave below).
     pendingSaveTimeout.current = setTimeout(async () => {
       pendingSaveTimeout.current = null;
       await saveCurrentFormDataToDisplayed();
@@ -942,24 +1020,24 @@ const App = () => {
     }, 300);
   };
 
-  const handleItemChange = (itemId, e) => {
+  // ── v22 FIX (unnecessary renders): handleItemChange and handleItemBlur are
+  // called on every input in the table. If they are inline arrow functions,
+  // React creates a new function reference on every render of the parent,
+  // which forces every input to re-render even when unrelated state changes
+  // (e.g. headerInfo updates cause all table inputs to re-render).
+  // Stabilizing with useCallback ensures stable references between renders.
+  // Note: these still update correctly because they use functional setState.
+  const handleItemChange = React.useCallback((itemId, e) => {
     const { name, value } = e.target;
-    setOrderItems((prevItems) => {
-      const updatedItems = prevItems.map((item) =>
-        item.id === itemId
-          ? {
-              ...item,
-              [name]: value,
-            }
-          : item
-      );
-      return updatedItems;
-    });
-  };
+    setOrderItems((prevItems) =>
+      prevItems.map((item) =>
+        item.id === itemId ? { ...item, [name]: value } : item
+      )
+    );
+  }, []); // no deps — uses only stable setState
 
-  const handleItemBlur = (itemId, e) => {
+  const handleItemBlur = React.useCallback((itemId, e) => {
     const { name, value, type } = e.target;
-
     setOrderItems((prevItems) => {
       const updatedItems = prevItems.map((item) => {
         if (item.id === itemId) {
@@ -967,39 +1045,22 @@ const App = () => {
           if (name === "preciosFOB") {
             const matches = value.match(/\d+([.,]\d+)?/g);
             const formattedPrices = [];
-
             if (matches && matches.length > 0) {
               for (const match of matches) {
                 const numericValue = parseFloat(match.replace(",", "."));
                 if (!isNaN(numericValue)) {
-                  formattedPrices.push(
-                    `$ ${numericValue.toFixed(2).replace(".", ",")}`
-                  );
+                  formattedPrices.push(`$ ${numericValue.toFixed(2).replace(".", ",")}`);
                 }
               }
             }
-
-            if (formattedPrices.length > 0) {
-              newValue = formattedPrices.join(" - ");
-            } else {
-              newValue = "";
-            }
+            newValue = formattedPrices.length > 0 ? formattedPrices.join(" - ") : "";
           } else if (name === "calibre") {
-            const parts = value
-              .split(/[,;\s-]+/)
-              .filter((part) => part.trim() !== "")
-              .map((part) => part.trim().toUpperCase());
+            const parts = value.split(/[,;\s-]+/).filter((part) => part.trim() !== "").map((part) => part.trim().toUpperCase());
             newValue = parts.join(" - ");
           } else if (name === "categoria") {
             const matches = value.match(/[a-zA-Z0-9]+/g);
-            if (matches && matches.length > 0) {
-              newValue = matches.join(" - ");
-            } else {
-              newValue = "";
-            }
-            newValue = newValue.toUpperCase();
-          }
-          else if (type !== "number") {
+            newValue = matches && matches.length > 0 ? matches.join(" - ").toUpperCase() : "";
+          } else if (type !== "number") {
             newValue = value.toUpperCase();
           }
           return { ...item, [name]: newValue };
@@ -1008,19 +1069,21 @@ const App = () => {
       });
       return updatedItems;
     });
-  };
+  }, []); // no deps — pure transformation using only event data
 
   const handleAddItem = (sourceItemId = null) => {
+    // ── v22 FIX (duplicate writes + stale closure): Previously saveOrderToFirestore
+    // was called INSIDE the setOrderItems setter. This caused two problems:
+    //   1. `headerInfo` captured in the setter is the stale closure value, not the
+    //      current header (same class of bug as the original stale-closure series).
+    //   2. The debounce autosave would also fire ~300ms later — two writes in flight.
+    // Fix: compute the next items first, then write once using refs.
     setOrderItems((prevItems) => {
       let updatedItems;
       if (sourceItemId) {
         const sourceItem = prevItems.find((item) => item.id === sourceItemId);
         if (sourceItem) {
-          const newItem = {
-            ...sourceItem,
-            id: crypto.randomUUID(),
-            isCanceled: false,
-          };
+          const newItem = { ...sourceItem, id: crypto.randomUUID(), isCanceled: false };
           const index = prevItems.findIndex((item) => item.id === sourceItemId);
           updatedItems = [
             ...prevItems.slice(0, index + 1),
@@ -1031,15 +1094,8 @@ const App = () => {
           updatedItems = [
             ...prevItems,
             {
-              id: crypto.randomUUID(),
-              pallets: "",
-              especie: "",
-              variedad: "",
-              formato: "",
-              calibre: "",
-              categoria: "",
-              preciosFOB: "",
-              estado: "",
+              id: crypto.randomUUID(), pallets: "", especie: "", variedad: "",
+              formato: "", calibre: "", categoria: "", preciosFOB: "", estado: "",
               isCanceled: false,
             },
           ];
@@ -1048,39 +1104,37 @@ const App = () => {
         updatedItems = [
           ...prevItems,
           {
-            id: crypto.randomUUID(),
-            pallets: "",
-            especie: "",
-            variedad: "",
-            formato: "",
-            calibre: "",
-            categoria: "",
-            preciosFOB: "",
-            estado: "",
+            id: crypto.randomUUID(), pallets: "", especie: "", variedad: "",
+            formato: "", calibre: "", categoria: "", preciosFOB: "", estado: "",
             isCanceled: false,
           },
         ];
       }
-      saveOrderToFirestore({
-        id: activeOrderId,
-        header: { ...headerInfo },
-        items: updatedItems,
-      });
+      // Schedule the Firestore write AFTER React commits the state update,
+      // reading from refs (always current) to avoid stale closures.
+      setTimeout(() => {
+        saveOrderToFirestore({
+          id: activeOrderIdRef.current,
+          header: { ...headerInfoRef.current },
+          items: updatedItems,
+        });
+      }, 0);
       return updatedItems;
     });
   };
 
   const handleDeleteItem = (idToDelete) => {
     setOrderItems((prevItems) => {
-      if (prevItems.length <= 1) {
-        return prevItems;
-      }
+      if (prevItems.length <= 1) return prevItems;
       const updatedItems = prevItems.filter((item) => item.id !== idToDelete);
-      saveOrderToFirestore({
-        id: activeOrderId,
-        header: { ...headerInfo },
-        items: updatedItems,
-      });
+      // ── v22 FIX: write outside setter using refs (not stale closures)
+      setTimeout(() => {
+        saveOrderToFirestore({
+          id: activeOrderIdRef.current,
+          header: { ...headerInfoRef.current },
+          items: updatedItems,
+        });
+      }, 0);
       return updatedItems;
     });
   };
@@ -1091,11 +1145,14 @@ const App = () => {
       const updated = [...prev];
       const [moved] = updated.splice(fromIndex, 1);
       updated.splice(toIndex, 0, moved);
-      saveOrderToFirestore({
-        id: activeOrderId,
-        header: { ...headerInfo },
-        items: updated,
-      });
+      // ── v22 FIX: write outside setter using refs
+      setTimeout(() => {
+        saveOrderToFirestore({
+          id: activeOrderIdRef.current,
+          header: { ...headerInfoRef.current },
+          items: updated,
+        });
+      }, 0);
       return updated;
     });
   };
@@ -1105,19 +1162,18 @@ const App = () => {
       const updatedItems = prevItems.map((item) => {
         if (item.id === itemId) {
           const newIsCanceled = !item.isCanceled;
-          return {
-            ...item,
-            isCanceled: newIsCanceled,
-            estado: newIsCanceled ? "CANCELADO" : "",
-          };
+          return { ...item, isCanceled: newIsCanceled, estado: newIsCanceled ? "CANCELADO" : "" };
         }
         return item;
       });
-      saveOrderToFirestore({
-        id: activeOrderId,
-        header: { ...headerInfo },
-        items: updatedItems,
-      });
+      // ── v22 FIX: write outside setter using refs
+      setTimeout(() => {
+        saveOrderToFirestore({
+          id: activeOrderIdRef.current,
+          header: { ...headerInfoRef.current },
+          items: updatedItems,
+        });
+      }, 0);
       return updatedItems;
     });
   };
@@ -1198,29 +1254,30 @@ const App = () => {
     const pStyle     = "margin:0;margin-bottom:3px;font-family:Arial,sans-serif;font-size:13px;color:#333333;line-height:1.5;";
     const pLastStyle = "margin:0;font-family:Arial,sans-serif;font-size:13px;color:#333333;line-height:1.5;";
 
+    // ── v18: padding duplicado para mayor legibilidad en el email ──────────────
     const thStyle =
       "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#ffffff;" +
-      "background-color:#2563eb;padding:4px 6px;" +
+      "background-color:#2563eb;padding:9px 14px;" +
       "border-top:1px solid #1e40af;border-bottom:1px solid #1e40af;" +
       "border-left:1px solid #1e40af;border-right:1px solid #1e40af;" +
       "text-align:center;white-space:nowrap;vertical-align:middle;";
 
     const tdBase =
       "font-family:Arial,sans-serif;font-size:11px;color:#333333;" +
-      "padding:4px 6px;text-align:center;white-space:nowrap;vertical-align:middle;" +
+      "padding:9px 14px;text-align:center;white-space:nowrap;vertical-align:middle;" +
       "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
       "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
 
     const tdTotalLabel =
       "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;" +
-      "background-color:#f0f0f0;padding:5px 12px 5px 6px;text-align:right;" +
+      "background-color:#f0f0f0;padding:9px 14px 9px 6px;text-align:right;" +
       "white-space:nowrap;vertical-align:middle;" +
       "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
       "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
 
     const tdTotalValue =
       "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;" +
-      "background-color:#f0f0f0;padding:5px 6px;text-align:center;" +
+      "background-color:#f0f0f0;padding:9px 14px;text-align:center;" +
       "white-space:nowrap;vertical-align:middle;" +
       "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
       "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
@@ -1248,7 +1305,7 @@ const App = () => {
 
     return `
 <tr>
-<td style="padding-bottom:80px;${orderBlockExtra}">
+<td style="padding-bottom:20px;${orderBlockExtra}">
 <div style="font-family:Arial,sans-serif;font-size:14px;color:#333333;background-color:#ffffff;border:1px solid #dddddd;border-radius:8px;padding:15px;text-align:left;box-sizing:border-box;">
 
   <div style="padding-bottom:10px;margin-bottom:12px;">
@@ -1335,15 +1392,18 @@ const App = () => {
     if (!db || !userId) return;
 
     if (activeOrderId) {
-      await saveCurrentFormDataToDisplayed();
+      await flushAndSave();
     }
+
+    // Read from refs after flush
+    const currentHeader = headerInfoRef.current;
 
     let mailIdToAssignForNewOrder = "";
     if (committedSearchTerm) {
       mailIdToAssignForNewOrder = committedSearchTerm;
     } else {
-      if (headerInfo.mailId && headerInfo.status === "draft") {
-        mailIdToAssignForNewOrder = headerInfo.mailId;
+      if (currentHeader.mailId && currentHeader.status === "draft") {
+        mailIdToAssignForNewOrder = currentHeader.mailId;
       } else {
         mailIdToAssignForNewOrder = crypto.randomUUID().substring(0, 8).toUpperCase();
       }
@@ -1355,9 +1415,9 @@ const App = () => {
 
     const newBlankHeader = {
       ...initialHeaderState,
-      reDestinatarios: headerInfo.reDestinatarios,
+      reDestinatarios: currentHeader.reDestinatarios,
       emailSubject: generateEmailSubjectValue(
-        [headerInfo.reDestinatarios],
+        [currentHeader.reDestinatarios],
         [],
         mailIdToAssignForNewOrder
       ),
@@ -1389,15 +1449,7 @@ const App = () => {
 
   const handlePreviousOrder = async () => {
     if (currentOrderIndex === 0) return;
-
-    if (pendingSaveTimeout.current) {
-      clearTimeout(pendingSaveTimeout.current);
-      pendingSaveTimeout.current = null;
-    }
-    isUserEditing.current = false;
-
-    await saveCurrentFormDataToDisplayed();
-
+    await flushAndSave();
     const newIndex = currentOrderIndex - 1;
     const target = displayedOrders[newIndex];
     if (target) {
@@ -1410,15 +1462,7 @@ const App = () => {
 
   const handleNextOrder = async () => {
     if (currentOrderIndex === displayedOrders.length - 1) return;
-
-    if (pendingSaveTimeout.current) {
-      clearTimeout(pendingSaveTimeout.current);
-      pendingSaveTimeout.current = null;
-    }
-    isUserEditing.current = false;
-
-    await saveCurrentFormDataToDisplayed();
-
+    await flushAndSave();
     const newIndex = currentOrderIndex + 1;
     const target = displayedOrders[newIndex];
     if (target) {
@@ -1458,7 +1502,7 @@ const App = () => {
     if (!term) return;
 
     if (activeOrderId) {
-      await saveCurrentFormDataToDisplayed();
+      await flushAndSave();
     }
 
     const conflicts = await checkPresenceConflict(term);
@@ -1489,7 +1533,7 @@ const App = () => {
 
   const handleClearSearch = async () => {
     if (activeOrderId) {
-      await saveCurrentFormDataToDisplayed();
+      await flushAndSave();
     }
 
     if (presenceMailId) {
@@ -1517,9 +1561,15 @@ const App = () => {
       if (!db || !userId) {
         return;
       }
-      await saveCurrentFormDataToDisplayed();
 
-      const mailGlobalId = headerInfo.mailId;
+      // Flush any pending blur state then persist to Firestore before acting
+      await flushAndSave();
+
+      // Read the authoritative state from refs (always current after flush)
+      const latestHeader = headerInfoRef.current;
+      const latestItems  = orderItemsRef.current;
+
+      const mailGlobalId = latestHeader.mailId;
 
       if (!mailGlobalId) {
         setShowOrderActionsModal(false);
@@ -1531,7 +1581,7 @@ const App = () => {
         `artifacts/${appId}/public/data/pedidos`
       );
 
-      const currentProveedor = headerInfo.reDestinatarios;
+      const currentProveedor = latestHeader.reDestinatarios;
       if (currentProveedor && mailGlobalId) {
         const ordersToGroupQuery = query(
           ordersCollectionRef,
@@ -1582,8 +1632,9 @@ const App = () => {
 
       const activeOrderCurrentState = {
         id: activeOrderId,
-        header: { ...headerInfo },
-        items: orderItems.map((item) => ({ ...item })),
+        // ── v19 FIX (Bug 2): use the ref-flushed snapshot, not the stale closure
+        header: { ...latestHeader },
+        items: latestItems.map((item) => ({ ...item })),
       };
 
       const existingIndexInProcess = ordersToProcess.findIndex(
@@ -1610,17 +1661,31 @@ const App = () => {
       });
       for (const order of ordersToProcess) {
         if (order.header?.status === "draft") {
+          // ── v21 SECURITY FIX: only flip status on documents owned by the
+          // current user. The mailId query (above) returns ALL docs with that
+          // mailId — including docs created by other users who share the same
+          // mailID. Without this guard, User A's "Send" would mark User B's
+          // draft as "sent" in Firestore without B's consent.
+          if (order.header?.createdBy && order.header.createdBy !== userId) {
+            continue;
+          }
+
           const orderDocRef = doc(
             db,
             `artifacts/${appId}/public/data/pedidos`,
             order.id
           );
-          await updateDoc(orderDocRef, {
+          const isActiveOrder = order.id === activeOrderId;
+          const updatePayload = {
             "header.mailId": mailGlobalId,
             "header.status": "sent",
             "header.lastModifiedBy": userId,
             "header.updatedAt": Date.now(),
-          });
+          };
+          if (isActiveOrder) {
+            updatePayload["items"] = JSON.stringify(latestItems);
+          }
+          await updateDoc(orderDocRef, updatePayload);
           order.header.status = "sent";
           order.header.mailId = mailGlobalId;
         }
@@ -1689,16 +1754,19 @@ const App = () => {
       setIsShowingPreview(false);
       setPreviewHtmlContent("");
 
-      // v17: recargar drafts + historial de sent tras el envío
       await loadMyDrafts();
     } catch (error) {
     }
   };
 
   const handlePreviewOrder = async () => {
-    await saveCurrentFormDataToDisplayed();
+    await flushAndSave();
 
-    const previewGlobalId = headerInfo.mailId;
+    // Read from refs after flush
+    const latestItems  = orderItemsRef.current;
+    const latestHeader = headerInfoRef.current;
+
+    const previewGlobalId = latestHeader.mailId;
 
     if (!previewGlobalId) {
       setPreviewHtmlContent(
@@ -1713,7 +1781,8 @@ const App = () => {
       `artifacts/${appId}/public/data/pedidos`
     );
 
-    const currentProveedor = headerInfo.reDestinatarios;
+    // ── v19 FIX: use latestHeader throughout (not stale headerInfo closure)
+    const currentProveedor = latestHeader.reDestinatarios;
     if (currentProveedor && previewGlobalId) {
       const ordersToGroupQuery = query(
         ordersCollectionRef,
@@ -1763,8 +1832,8 @@ const App = () => {
 
     const activeOrderCurrentState = {
       id: activeOrderId,
-      header: { ...headerInfo },
-      items: orderItems.map((item) => ({ ...item })),
+      header: { ...latestHeader },
+      items: latestItems.map((item) => ({ ...item })),
     };
 
     const existingIndex = ordersForPreview.findIndex(
@@ -1827,14 +1896,17 @@ const App = () => {
   };
 
   const handleFinalizeOrder = async () => {
+    // ── v20 FIX: handleFinalizeOrder was missing a ref-flush in v19.
+    // If the user edited a field and immediately clicked "Finalizar",
+    // the blur debounce may not have fired yet.
+    await flushAndSave();
 
-    let mailIdToAssign = headerInfo.mailId;
-    if (!headerInfo.mailId) {
+    // Read mailId from ref (not stale closure)
+    let mailIdToAssign = headerInfoRef.current.mailId;
+    if (!mailIdToAssign) {
       mailIdToAssign = crypto.randomUUID().substring(0, 8).toUpperCase();
       setHeaderInfo((prev) => ({ ...prev, mailId: mailIdToAssign }));
     }
-
-    await saveCurrentFormDataToDisplayed();
 
     setShowOrderActionsModal(true);
     setEmailActionTriggered(false);
@@ -1873,9 +1945,10 @@ const App = () => {
           : item
       );
       setOrderItems(updatedItems);
+      // ── v22 FIX: use refs instead of stale headerInfo closure
       saveOrderToFirestore({
-        id: activeOrderId,
-        header: { ...headerInfo },
+        id: activeOrderIdRef.current,
+        header: { ...headerInfoRef.current },
         items: updatedItems,
       });
     }
@@ -3062,7 +3135,7 @@ const App = () => {
         whiteSpace: "nowrap",
         zIndex: 10,
       }}>
-        v17.2 · 04 Mar 2026
+        v23.0 · 05 Mar 2026
       </div>
     </div>
   );

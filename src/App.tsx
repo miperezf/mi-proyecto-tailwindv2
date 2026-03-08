@@ -287,14 +287,15 @@ const App = () => {
       const allProveedores = new Set();
       const allEspecies = new Set();
 
+      // ── v26: compute the widest card so all cards render at the same width
+      const maxWidth = Math.max(...ordersToProcess.map(o => measureOrderWidth(o.header, o.items)));
+
       ordersToProcess.forEach((order, index) => {
         innerEmailContentHtml += `
-            <tr>
-              <td style="padding-bottom:8px;">
-                <h3 style="margin:0;font-size:16px;color:#2563eb;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
-              </td>
-            </tr>
-            ${generateSingleOrderHtml(order.header, order.items, index + 1)}
+            <div style="margin-bottom:8px;margin-left:16px;">
+              <h3 style="margin:0 0 6px 0;font-size:16px;color:#2563eb;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
+            </div>
+            ${generateSingleOrderHtml(order.header, order.items, index + 1, maxWidth)}
         `;
         if (order.header.reDestinatarios) allProveedores.add(order.header.reDestinatarios);
         order.items.forEach((item) => { if (item.especie) allEspecies.add(item.especie); });
@@ -313,11 +314,11 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Detalle de Pedido</title>
 </head>
-<body style="margin:0;padding:16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:16px 16px 16px 32px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
   <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${mailId}</div>
-  <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:auto;">
+  <div>
     ${innerEmailContentHtml}
-  </table>
+  </div>
 </body>
 </html>`;
 
@@ -1219,10 +1220,38 @@ const App = () => {
       .replace(/'/g, "&#39;");
   };
 
+  // ── v26: calculates the approximate pixel width a single order's table
+  // would need, based on character counts in each column. Used to find the
+  // widest order so all cards can be rendered at the same width.
+  const measureOrderWidth = (orderHeader, orderItemsData) => {
+    // px per character (Arial 11px ≈ 7px/char) + column padding (28px = 14px each side)
+    const PX_PER_CHAR = 7;
+    const COL_PADDING = 28;
+
+    // Column headers (minimum width per column)
+    const headers = ["Pallets", "Especie", "Variedad", "Formato", "Calibre", "Categoría",
+      `Precios ${orderHeader.incoterm || "FOB"}`];
+
+    // For each column, find the max char length across header + all data rows
+    const colWidths = headers.map((h, colIdx) => {
+      const colKey = ["pallets","especie","variedad","formato","calibre","categoria","preciosFOB"][colIdx];
+      const maxDataLen = orderItemsData.reduce((max, item) => {
+        const val = String(item[colKey] || "");
+        return Math.max(max, val.length);
+      }, 0);
+      return Math.max(h.length, maxDataLen) * PX_PER_CHAR + COL_PADDING;
+    });
+
+    // Total table width = sum of all columns
+    // Add card padding (15px each side = 30px) + border (2px)
+    return colWidths.reduce((a, b) => a + b, 0) + 32;
+  };
+
   const generateSingleOrderHtml = (
     orderHeader,
     orderItemsData,
-    orderNumber
+    orderNumber,
+    fixedWidth = null   // ── v26: if provided, card renders at this exact px width
   ) => {
     const nonCancelledItems = orderItemsData.filter((item) => !item.isCanceled);
     const singleOrderTotalPallets = nonCancelledItems.reduce((sum, item) => {
@@ -1251,33 +1280,33 @@ const App = () => {
       ? "opacity:0.6;text-decoration:line-through;"
       : "";
 
-    const pStyle     = "margin:0;margin-bottom:3px;font-family:Arial,sans-serif;font-size:13px;color:#333333;line-height:1.5;";
-    const pLastStyle = "margin:0;font-family:Arial,sans-serif;font-size:13px;color:#333333;line-height:1.5;";
+    // ── v32: header fields use <table> rows instead of <p> tags
+    // so Outlook respects font-size and color when HTML is pasted
 
     // ── v18: padding duplicado para mayor legibilidad en el email ──────────────
     const thStyle =
-      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#ffffff;" +
-      "background-color:#2563eb;padding:9px 14px;" +
+      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#ffffff;mso-color-alt:#ffffff;" +
+      "background-color:#2563eb;padding:4px 8px;" +
       "border-top:1px solid #1e40af;border-bottom:1px solid #1e40af;" +
       "border-left:1px solid #1e40af;border-right:1px solid #1e40af;" +
       "text-align:center;white-space:nowrap;vertical-align:middle;";
 
     const tdBase =
-      "font-family:Arial,sans-serif;font-size:11px;color:#333333;" +
-      "padding:9px 14px;text-align:center;white-space:nowrap;vertical-align:middle;" +
+      "font-family:Arial,sans-serif;font-size:11px;color:#333333;mso-color-alt:#333333;" +
+      "padding:4px 8px;text-align:center;white-space:nowrap;vertical-align:middle;" +
       "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
       "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
 
     const tdTotalLabel =
-      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;" +
-      "background-color:#f0f0f0;padding:9px 14px 9px 6px;text-align:right;" +
+      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;mso-color-alt:#333333;" +
+      "background-color:#f0f0f0;padding:6px 14px 6px 6px;text-align:right;" +
       "white-space:nowrap;vertical-align:middle;" +
       "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
       "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
 
     const tdTotalValue =
-      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;" +
-      "background-color:#f0f0f0;padding:9px 14px;text-align:center;" +
+      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;mso-color-alt:#333333;" +
+      "background-color:#f0f0f0;padding:6px 14px;text-align:center;" +
       "white-space:nowrap;vertical-align:middle;" +
       "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
       "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
@@ -1303,20 +1332,22 @@ const App = () => {
       })
       .join("");
 
-    return `
-<tr>
-<td style="padding-bottom:20px;${orderBlockExtra}">
-<div style="font-family:Arial,sans-serif;font-size:14px;color:#333333;background-color:#ffffff;border:1px solid #dddddd;border-radius:8px;padding:15px;text-align:left;box-sizing:border-box;">
+    const cardWidthStyle = fixedWidth ? `width:${fixedWidth}px;` : "";
+    const tableWidthStyle = fixedWidth ? `width:${fixedWidth - 32}px;` : "width:auto;";
 
-  <div style="padding-bottom:10px;margin-bottom:12px;">
-    <p style="${pStyle}"><strong style="font-weight:bold;">País:</strong> ${formattedPais}</p>
-    <p style="${pStyle}"><strong style="font-weight:bold;">Nave:</strong> ${formattedNave}</p>
-    <p style="${pStyle}"><strong style="font-weight:bold;">Fecha de carga:</strong> ${formattedFechaCarga}</p>
-    <p style="${pLastStyle}"><strong style="font-weight:bold;">Exporta:</strong> ${formattedExporta}</p>
+    return `
+<div style="margin-bottom:48px;margin-left:16px;display:inline-block;${cardWidthStyle}${orderBlockExtra}">
+<div style="font-family:Arial,sans-serif;font-size:11px;color:#333333;mso-color-alt:#333333;background-color:#f8f8f8;border:1px solid #dddddd;border-radius:8px;padding:15px;text-align:left;box-sizing:border-box;">
+
+  <div style="margin-bottom:10px;">
+    <p style="margin:0 0 3px 0;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;"><span style="font-weight:bold;">País:</span> ${formattedPais}</p>
+    <p style="margin:0 0 3px 0;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;"><span style="font-weight:bold;">Nave:</span> ${formattedNave}</p>
+    <p style="margin:0 0 3px 0;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;"><span style="font-weight:bold;">Fecha de carga:</span> ${formattedFechaCarga}</p>
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;"><span style="font-weight:bold;">Exporta:</span> ${formattedExporta}</p>
   </div>
 
   <table cellpadding="0" cellspacing="0" border="0"
-    style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;width:100%;table-layout:auto;margin-top:8px;">
+    style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${tableWidthStyle}table-layout:auto;margin-top:8px;">
     <thead>
       <tr style="background-color:#2563eb;">
         <th style="${thStyle}">Pallets</th>
@@ -1337,13 +1368,12 @@ const App = () => {
     </tbody>
   </table>
 
-  <p style="margin-top:10px;margin-bottom:0;font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#333333;">
-    Observaciones: <span style="font-weight:normal;font-style:italic;color:#555555;">${consolidatedObservationsText}</span>
+  <p style="margin-top:10px;margin-bottom:0;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;">
+    Observaciones: <span style="font-weight:normal;font-style:italic;font-size:11px;font-family:Arial,sans-serif;">${consolidatedObservationsText}</span>
   </p>
 
 </div>
-</td>
-</tr>`;
+</div>`;
   };
 
   const copyFormattedContentToClipboard = async (content) => {
@@ -1704,14 +1734,15 @@ const App = () => {
       const allProveedores = new Set();
       const allEspecies = new Set();
 
+      // ── v26: compute the widest card so all cards render at the same width
+      const maxWidth = Math.max(...ordersToProcess.map(o => measureOrderWidth(o.header, o.items)));
+
       ordersToProcess.forEach((order, index) => {
         innerEmailContentHtml += `
-            <tr>
-              <td style="padding-bottom:8px;">
-                <h3 style="margin:0;font-size:16px;color:#2563eb;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
-              </td>
-            </tr>
-            ${generateSingleOrderHtml(order.header, order.items, index + 1)}
+            <div style="margin-bottom:8px;margin-left:16px;">
+              <h3 style="margin:0 0 6px 0;font-size:16px;color:#2563eb;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
+            </div>
+            ${generateSingleOrderHtml(order.header, order.items, index + 1, maxWidth)}
         `;
 
         if (order.header.reDestinatarios)
@@ -1734,11 +1765,11 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Detalle de Pedido</title>
 </head>
-<body style="margin:0;padding:16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:16px 16px 16px 32px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
   <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${mailGlobalId}</div>
-  <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:auto;">
+  <div>
     ${innerEmailContentHtml}
-  </table>
+  </div>
 </body>
 </html>`;
 
@@ -1865,14 +1896,16 @@ const App = () => {
       );
     } else {
       let innerPreviewHtml = "";
+
+      // ── v26: compute the widest card so all cards render at the same width
+      const maxWidth = Math.max(...ordersForPreview.map(o => measureOrderWidth(o.header, o.items)));
+
       ordersForPreview.forEach((order, index) => {
         innerPreviewHtml += `
-            <tr>
-              <td style="padding-bottom:8px;">
-                <h3 style="margin:0;font-size:16px;color:#2563eb;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
-              </td>
-            </tr>
-            ${generateSingleOrderHtml(order.header, order.items, index + 1)}
+            <div style="margin-bottom:8px;margin-left:16px;">
+              <h3 style="margin:0 0 6px 0;font-size:16px;color:#2563eb;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
+            </div>
+            ${generateSingleOrderHtml(order.header, order.items, index + 1, maxWidth)}
         `;
       });
 
@@ -1883,11 +1916,11 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Previsualización de Pedido</title>
 </head>
-<body style="margin:0;padding:16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:16px 16px 16px 32px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
   <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${previewGlobalId}</div>
-  <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:auto;">
+  <div>
     ${innerPreviewHtml}
-  </table>
+  </div>
 </body>
 </html>`;
       setPreviewHtmlContent(finalPreviewHtml);
@@ -2187,7 +2220,7 @@ const App = () => {
           </div>
         )}
 
-        <div className="border-b pb-4 mb-4 pt-16 sm:pt-0">
+        <div className="">
           <h1 className="text-xl sm:text-2xl font-bold text-center text-gray-800 mb-4">
             Pedidos Comercial Frutam
           </h1>
@@ -2640,7 +2673,7 @@ const App = () => {
                     </tr>
                   ))}
                   <tr style={{ backgroundColor: "#e0e0e0" }}>
-                    <td colSpan="6" style={{ padding: "6px 15px 6px 6px", textAlign: "right", fontWeight: "bold", border: "1px solid #ccc", borderBottomLeftRadius: "8px", marginTop: "15px" }}>
+                    <td colSpan="7" style={{ padding: "6px 15px 6px 6px", textAlign: "right", fontWeight: "bold", border: "1px solid #ccc", borderBottomLeftRadius: "8px", marginTop: "15px" }}>
                       Total de Pallets:
                     </td>
                     <td colSpan="1" style={{ padding: "6px", fontWeight: "bold", border: "1px solid #ccc", borderBottomRightRadius: "8px", textAlign: "center" }}>
@@ -3135,7 +3168,7 @@ const App = () => {
         whiteSpace: "nowrap",
         zIndex: 10,
       }}>
-        v23.0 · 05 Mar 2026
+        v35.0 · 08 Mar 2026
       </div>
     </div>
   );

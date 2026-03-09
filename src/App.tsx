@@ -54,6 +54,7 @@ const InputField = React.forwardRef(
       type = "text",
       list,
       readOnly = false,
+      darkMode = false,
     },
     ref
   ) => {
@@ -63,7 +64,8 @@ const InputField = React.forwardRef(
       <div className="mb-2 w-full">
         <label
           htmlFor={name}
-          className="block text-sm font-medium text-gray-700"
+          className="block text-sm font-medium"
+          style={{ color: darkMode ? "#ffffff" : "#374151" }}
         >
           {label}
         </label>
@@ -148,26 +150,12 @@ const App = () => {
   const presenceUnsubscribeRef = useRef(null);
 
   // ─── LAST SEND RECOVERY ─────────────────────────────────────────────────────
-  const LAST_SEND_KEY = "frutam_last_send";
-
-  const [lastSendData, setLastSendData] = useState(() => {
-    try {
-      const raw = localStorage.getItem(LAST_SEND_KEY);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (parsed && !parsed.confirmed && Date.now() - parsed.timestamp < 24 * 60 * 60 * 1000) {
-        return parsed;
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  });
-
-  const [showRecoveryModal, setShowRecoveryModal] = useState(false);
 
   // ─── HISTORY PANEL ──────────────────────────────────────────────────────────
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
+  const [showWhatsNew, setShowWhatsNew] = useState(() => {
+    return localStorage.getItem("frutam_whatsnew_v47") !== "seen";
+  });
   const [historyResendingId, setHistoryResendingId] = useState(null);
 
   // ─── EMAIL CLIENT CONFIG ─────────────────────────────────────────────────────
@@ -176,6 +164,150 @@ const App = () => {
     () => localStorage.getItem(EMAIL_CLIENT_KEY) || "auto"
   );
   const [showConfigPanel, setShowConfigPanel] = useState(false);
+
+  // ─── AUTOCOMPLETADO CONTEXTUAL ──────────────────────────────────────────────
+  const [proveedorSuggestion, setProveedorSuggestion] = useState(null);
+  const suggestionTimerRef = useRef(null);
+  const lookupDebounceRef = useRef(null);
+  const suggestionAppliedRef = useRef(""); // stores proveedor name — empty means no suggestion applied yet
+  const committedSearchTermRef = useRef("");
+
+  // ─── DARK MODE ───────────────────────────────────────────────────────────────
+  const DARK_MODE_KEY = "frutam_dark_mode";
+  const [darkMode, setDarkMode] = useState(
+    () => localStorage.getItem(DARK_MODE_KEY) === "true"
+  );
+  const toggleDarkMode = () => {
+    setDarkMode((prev) => {
+      localStorage.setItem(DARK_MODE_KEY, String(!prev));
+      return !prev;
+    });
+  };
+
+  // ─── PROFILE CRUD ────────────────────────────────────────────────────────────
+
+  // ─── BUSCAR ÚLTIMO PEDIDO DE PROVEEDOR ───────────────────────────────────────
+  const lookupLastOrderForProveedor = async (proveedorName) => {
+    const TAG = "[PRELOAD]";
+    const name = (proveedorName || "").trim();
+
+    const nameLower = name.toLowerCase();
+
+    // ── GUARDS ──────────────────────────────────────────────────────────────────
+    if (!db || !name) {
+      return;
+    }
+    if (committedSearchTermRef.current) {
+      return;
+    }
+    if (suggestionAppliedRef.current === nameLower) {
+      return;
+    }
+    const currentItems = orderItemsRef.current;
+    const hasData = currentItems.some(it => it.especie || it.variedad || it.formato);
+    if (hasData) {
+      return;
+    }
+
+    // ── FIRESTORE QUERY ─────────────────────────────────────────────────────────
+    try {
+      const snap = await getDocs(query(
+        collection(db, `artifacts/${appId}/public/data/pedidos`),
+        where("header.status", "==", "sent")
+      ));
+
+      const allSent = parseFirestoreOrders(snap.docs);
+
+      // ── FIND MATCHING ORDERS ─────────────────────────────────────────────────
+      const matches = allSent
+        .filter(o => (o.header?.reDestinatarios || "").toLowerCase() === nameLower)
+        .sort((a, b) => (b.header?.updatedAt || 0) - (a.header?.updatedAt || 0));
+
+      if (matches.length === 0) {
+        return;
+      }
+
+      // ── FIND MOST RECENT ORDER WITH ACTUAL ITEM DATA ─────────────────────────
+      let bestOrder = null;
+      let bestItems = [];
+
+      for (const order of matches) {
+        const raw = Array.isArray(order.items) ? order.items : [];
+        const candidates = raw.filter(it => it.especie || it.variedad);
+        if (candidates.length > 0) {
+          bestOrder = order;
+          bestItems = candidates;
+          break;
+        }
+      }
+
+      if (!bestOrder || bestItems.length === 0) {
+        return;
+      }
+
+      // ── BUILD SUGGESTION ─────────────────────────────────────────────────────
+      // Include ALL item fields — pallets and prices included
+      const suggestionItems = bestItems.map(it => ({
+        especie:    it.especie    || "",
+        variedad:   it.variedad   || "",
+        formato:    it.formato    || "",
+        calibre:    it.calibre    || "",
+        categoria:  it.categoria  || "",
+        pallets:    it.pallets    || "",
+        preciosFOB: it.preciosFOB || "",
+      }));
+
+      const suggestion = {
+        proveedor:      name,
+        nave:           bestOrder.header?.nave          || "",
+        deNombrePais:   bestOrder.header?.deNombrePais  || "",
+        exporta:        bestOrder.header?.exporta       || "",
+        incoterm:       bestOrder.header?.incoterm      || "FOB",
+        items:          suggestionItems,
+      };
+
+      setProveedorSuggestion(suggestion);
+      if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
+      suggestionTimerRef.current = setTimeout(() => {
+        setProveedorSuggestion(null);
+      }, 12000);
+
+    } catch (e) {
+      console.error(`${TAG} ERROR:`, e);
+    }
+  };
+
+    const applyProveedorSuggestion = () => {
+    if (!proveedorSuggestion) return;
+    if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
+
+    const TAG = "[PRELOAD]";
+    // Fill table with all fields — only reset estado and isCanceled
+    const newItems = proveedorSuggestion.items.map(it => ({
+      id: crypto.randomUUID(),
+      especie:    it.especie    || "",
+      variedad:   it.variedad   || "",
+      formato:    it.formato    || "",
+      calibre:    it.calibre    || "",
+      categoria:  it.categoria  || "",
+      pallets:    it.pallets    || "",
+      preciosFOB: it.preciosFOB || "",
+      estado:     "",
+      isCanceled: false,
+    }));
+    setOrderItems(newItems);
+    orderItemsRef.current = newItems;
+    suggestionAppliedRef.current = proveedorSuggestion.proveedor.toLowerCase();
+    setProveedorSuggestion(null);
+  };
+
+  const dismissProveedorSuggestion = () => {
+    if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
+    if (proveedorSuggestion) {
+      suggestionAppliedRef.current = proveedorSuggestion.proveedor.toLowerCase();
+    }
+    setProveedorSuggestion(null);
+  };
 
   const saveEmailClientPref = (pref) => {
     localStorage.setItem(EMAIL_CLIENT_KEY, pref);
@@ -224,32 +356,7 @@ const App = () => {
     }, 600);
   };
 
-  const saveLastSend = (mailId, subject, html) => {
-    const record = { mailId, subject, html, timestamp: Date.now(), confirmed: false };
-    localStorage.setItem(LAST_SEND_KEY, JSON.stringify(record));
-    setLastSendData(record);
-  };
-
-  const confirmLastSend = () => {
-    try {
-      const raw = localStorage.getItem(LAST_SEND_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        parsed.confirmed = true;
-        localStorage.setItem(LAST_SEND_KEY, JSON.stringify(parsed));
-      }
-    } catch { /* ignore */ }
-    setLastSendData(null);
-  };
-
-  const recoverLastSend = async () => {
-    if (!lastSendData) return;
-    await copyFormattedContentToClipboard(lastSendData.html);
-    openEmailClient(lastSendData.subject);
-    setShowRecoveryModal(false);
-  };
-
-  // ─── DERIVED: last 3 sent Mail IDs for the current user ─────────────────────
+  // ─── DERIVED: last 5 sent Mail IDs for the current user ─────────────────────
   const sentHistory = React.useMemo(() => {
     const sentOrders = allOrdersFromFirestore.filter(
       (o) =>
@@ -270,7 +377,7 @@ const App = () => {
     });
     return Object.values(grouped)
       .sort((a, b) => b.latestUpdatedAt - a.latestUpdatedAt)
-      .slice(0, 3);
+      .slice(0, 5);
   }, [allOrdersFromFirestore, userId]);
 
   const resendFromHistory = async (mailId) => {
@@ -323,7 +430,6 @@ const App = () => {
 </html>`;
 
       await copyFormattedContentToClipboard(fullEmailBodyHtml);
-      saveLastSend(mailId, consolidatedSubject, fullEmailBodyHtml);
 
       openEmailClient(consolidatedSubject);
     } catch (err) {
@@ -790,16 +896,23 @@ const App = () => {
     if (!db || !userId) return;
     try {
       const ordersCollectionRef = collection(db, `artifacts/${appId}/public/data/pedidos`);
+      // Single where clause only — avoids composite index requirement
       const q = query(
         ordersCollectionRef,
-        where("header.lastModifiedBy", "==", userId),
         where("header.status", "==", "sent")
       );
       const snapshot = await getDocs(q);
-      const sentOrders = parseFirestoreOrders(snapshot.docs);
+      // Filter by userId in memory
+      const sentOrders = parseFirestoreOrders(snapshot.docs).filter(
+        (o) => o.header?.lastModifiedBy === userId
+      );
       setAllOrdersFromFirestore([...currentDrafts, ...sentOrders]);
     } catch (err) {
-      // No crítico
+      console.error("loadSentHistory error:", err);
+      setAllOrdersFromFirestore((prev) => {
+        const existingSent = prev.filter((o) => o.header?.status === "sent");
+        return [...currentDrafts, ...existingSent];
+      });
     }
   };
 
@@ -871,9 +984,25 @@ const App = () => {
         (o) => o.header?.status !== "deleted"
       );
 
+      // Re-fetch sent history so it's always fresh, not stale from prev state
+      let freshSent = [];
+      try {
+        const sentQ = query(
+          ordersCollectionRef,
+          where("header.status", "==", "sent")
+        );
+        const sentSnap = await getDocs(sentQ);
+        freshSent = parseFirestoreOrders(sentSnap.docs).filter(
+          (o) => o.header?.lastModifiedBy === userId
+        );
+      } catch (_) {
+        freshSent = [];
+      }
       setAllOrdersFromFirestore((prev) => {
-        const sentOnly = prev.filter((o) => o.header?.status === "sent");
-        return [...orders, ...sentOnly];
+        const existingSent = freshSent.length > 0
+          ? freshSent
+          : prev.filter((o) => o.header?.status === "sent");
+        return [...orders, ...existingSent];
       });
 
       if (orders.length === 0) {
@@ -1030,9 +1159,13 @@ const App = () => {
   // Note: these still update correctly because they use functional setState.
   const handleItemChange = React.useCallback((itemId, e) => {
     const { name, value } = e.target;
+    // ── v40: clamp pallets to 0 minimum on every change
+    const sanitized = name === "pallets" && value !== ""
+      ? String(Math.max(0, parseFloat(value) || 0))
+      : value;
     setOrderItems((prevItems) =>
       prevItems.map((item) =>
-        item.id === itemId ? { ...item, [name]: value } : item
+        item.id === itemId ? { ...item, [name]: sanitized } : item
       )
     );
   }, []); // no deps — uses only stable setState
@@ -1061,6 +1194,10 @@ const App = () => {
           } else if (name === "categoria") {
             const matches = value.match(/[a-zA-Z0-9]+/g);
             newValue = matches && matches.length > 0 ? matches.join(" - ").toUpperCase() : "";
+          } else if (name === "pallets") {
+            // ── v40: enforce minimum 0 on blur (covers paste and autofill)
+            const parsed = parseFloat(value);
+            newValue = isNaN(parsed) ? "" : String(Math.max(0, parsed));
           } else if (type !== "number") {
             newValue = value.toUpperCase();
           }
@@ -1183,7 +1320,9 @@ const App = () => {
     if (item.isCanceled) {
       return sum;
     }
-    const pallets = parseFloat(item.pallets) || 0;
+    // ── v39: Math.max(0, ...) prevents negative pallet values from
+    // pulling the total below zero
+    const pallets = Math.max(0, parseFloat(item.pallets) || 0);
     return sum + pallets;
   }, 0);
 
@@ -1255,7 +1394,7 @@ const App = () => {
   ) => {
     const nonCancelledItems = orderItemsData.filter((item) => !item.isCanceled);
     const singleOrderTotalPallets = nonCancelledItems.reduce((sum, item) => {
-      const pallets = parseFloat(item.pallets) || 0;
+      const pallets = Math.max(0, parseFloat(item.pallets) || 0);
       return sum + pallets;
     }, 0);
 
@@ -1475,6 +1614,8 @@ const App = () => {
     setActiveOrderId(newOrderId);
     setHeaderInfo(newBlankHeader);
     setOrderItems(newBlankItems);
+    // Only allow suggestion again if new order has no proveedor (user will type a new one)
+    if (!committedSearchTerm && !newBlankHeader.reDestinatarios) suggestionAppliedRef.current = "";
   };
 
   const handlePreviousOrder = async () => {
@@ -1531,9 +1672,9 @@ const App = () => {
     const term = searchTerm.toUpperCase().trim();
     if (!term) return;
 
-    if (activeOrderId) {
-      await flushAndSave();
-    }
+    suggestionAppliedRef.current = "";
+
+    if (activeOrderId) await flushAndSave();
 
     const conflicts = await checkPresenceConflict(term);
     if (conflicts.length > 0) {
@@ -1557,6 +1698,7 @@ const App = () => {
     await writePresence(term);
     subscribeToPresence(term);
     setCommittedSearchTerm(term);
+    committedSearchTermRef.current = term;
 
     await searchByMailId(term);
   };
@@ -1576,9 +1718,49 @@ const App = () => {
       setOtherUsersPresent([]);
     }
 
+    // Reset UI immediately — don't wait for Firestore
+    setSearchTerm("");
+    setCommittedSearchTerm("");
+    committedSearchTermRef.current = "";
+    setDisplayedOrders([]);
+    setActiveOrderId(null);
+    activeOrderIdRef.current = null;
+    setCurrentOrderIndex(0);
+    setHeaderInfo({ ...initialHeaderState });
+    headerInfoRef.current = { ...initialHeaderState };
+    setOrderItems([{ ...initialItemState, id: crypto.randomUUID() }]);
+    orderItemsRef.current = [{ ...initialItemState, id: crypto.randomUUID() }];
+    setProveedorSuggestion(null);
+    if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
+    suggestionAppliedRef.current = "";
+
+    await loadMyDrafts();
+  };
+
+  const handleNewMail = async () => {
+    if (!db || !userId) return;
+
+    // Soft-delete all current drafts
+    const currentDrafts = displayedOrders.filter(o => o.header?.status === "draft");
+    await Promise.all(currentDrafts.map(o => handleSoftDeleteOrderInFirestore(o.id)));
+
+    // Reset UI immediately
+    setDisplayedOrders([]);
+    setActiveOrderId(null);
+    activeOrderIdRef.current = null;
+    setCurrentOrderIndex(0);
+    setHeaderInfo({ ...initialHeaderState });
+    headerInfoRef.current = { ...initialHeaderState };
+    setOrderItems([{ ...initialItemState, id: crypto.randomUUID() }]);
+    orderItemsRef.current = [{ ...initialItemState, id: crypto.randomUUID() }];
+    setProveedorSuggestion(null);
+    if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
+    suggestionAppliedRef.current = "";
+    committedSearchTermRef.current = "";
     setSearchTerm("");
     setCommittedSearchTerm("");
 
+    // Create fresh draft with new mailId
     await loadMyDrafts();
   };
 
@@ -1774,7 +1956,6 @@ const App = () => {
 </html>`;
 
       await copyFormattedContentToClipboard(fullEmailBodyHtml);
-      saveLastSend(mailGlobalId, consolidatedSubject, fullEmailBodyHtml);
 
       openEmailClient(consolidatedSubject);
 
@@ -1784,6 +1965,18 @@ const App = () => {
       setEmailActionTriggered(false);
       setIsShowingPreview(false);
       setPreviewHtmlContent("");
+
+      // Optimistically update allOrdersFromFirestore with just-sent orders
+      // so sentHistory badge/panel refreshes immediately
+      setAllOrdersFromFirestore((prev) => {
+        const notSentYet = prev.filter((o) => o.header?.status !== "sent");
+        const nowSent = ordersToProcess.map((o) => ({
+          ...o,
+          header: { ...o.header, status: "sent", lastModifiedBy: userId },
+        }));
+        const alreadySent = prev.filter((o) => o.header?.status === "sent");
+        return [...notSentYet, ...nowSent, ...alreadySent];
+      });
 
       await loadMyDrafts();
     } catch (error) {
@@ -2145,27 +2338,87 @@ const App = () => {
     };
   }, []);
 
+  const currentOrderIsDeleted = headerInfo.status === "deleted";
+
+  // ── v38 CLS FIX: Instead of swapping the entire DOM (which caused a 0.25 CLS
+  // score), we always render the same layout shell and replace only the inner
+  // content area with a skeleton while loading. This keeps the page geometry
+  // stable and eliminates the largest layout shift.
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
-        <div className="text-blue-600 text-lg font-semibold">
-          Cargando pedidos...
+      <div className="min-h-screen bg-gray-100 p-4 sm:p-6 lg:p-8 font-inter">
+        <div className="max-w-4xl mx-auto bg-white rounded-xl shadow-lg p-4 sm:p-6 space-y-6 relative">
+          {/* Same header shell as real UI */}
+          <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
+            <div className="w-20 sm:w-24 md:w-28 h-9 bg-gray-200 rounded-md animate-pulse" />
+          </div>
+          <div className="">
+            <div className="h-7 w-64 bg-gray-200 rounded animate-pulse mx-auto mb-4" />
+            <div className="flex items-end gap-2 mb-4">
+              <div className="flex-grow h-9 bg-gray-100 rounded-md border border-gray-200 animate-pulse" />
+              <div className="w-20 h-9 bg-blue-200 rounded-md animate-pulse" />
+              <div className="w-28 h-9 bg-gray-200 rounded-md animate-pulse" />
+            </div>
+            {/* Skeleton form card */}
+            <div className="border border-gray-200 rounded-xl p-4 space-y-3 animate-pulse">
+              <div className="grid grid-cols-2 gap-3">
+                {[...Array(6)].map((_, i) => (
+                  <div key={i} className="space-y-1">
+                    <div className="h-3 w-24 bg-gray-200 rounded" />
+                    <div className="h-8 bg-gray-100 rounded border border-gray-200" />
+                  </div>
+                ))}
+              </div>
+              <div className="h-px bg-gray-100 my-2" />
+              {/* Skeleton table */}
+              <div className="space-y-2">
+                <div className="h-8 bg-blue-100 rounded" />
+                {[...Array(3)].map((_, i) => (
+                  <div key={i} className="h-7 bg-gray-50 rounded border border-gray-100" />
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     );
   }
 
-  const currentOrderIsDeleted = headerInfo.status === "deleted";
-
   return (
-    <div className="min-h-screen bg-gray-100 p-4 sm:p-6 lg:p-8 font-inter">
-      <div className="max-w-4xl mx-auto bg-white rounded-xl shadow-lg p-4 sm:p-6 space-y-6 relative">
+    <div
+      className="min-h-screen p-4 sm:p-6 lg:p-8 font-inter transition-colors duration-200"
+      style={{ backgroundColor: darkMode ? "#111827" : "#f3f4f6" }}
+    >
+      <div
+        className="max-w-4xl mx-auto rounded-xl shadow-lg p-4 sm:p-6 space-y-6 relative transition-colors duration-200"
+        style={{
+          backgroundColor: darkMode ? "#1f2937" : "#ffffff",
+          borderColor: darkMode ? "#374151" : "transparent",
+          border: darkMode ? "1px solid #374151" : undefined,
+        }}
+      >
 
         <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
 
+          {!committedSearchTerm && (
+            <button
+              onClick={() => {
+                if (window.confirm("¿Iniciar un nuevo mail? Los pedidos actuales serán eliminados.")) {
+                  handleNewMail();
+                }
+              }}
+              className="p-1.5 rounded-full border shadow-sm transition-colors"
+              style={{ backgroundColor: darkMode ? "#374151" : "#ffffff", borderColor: darkMode ? "#4b5563" : "#e5e7eb" }}
+              title="Nuevo mail — descarta drafts actuales"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            </button>
+          )}
           <button
             onClick={() => setShowConfigPanel(true)}
-            className="p-1.5 rounded-full bg-white border border-gray-200 shadow-sm hover:bg-gray-50 hover:border-gray-400 transition-colors"
+            className="p-1.5 rounded-full border shadow-sm transition-colors" style={{ backgroundColor: darkMode ? "#374151" : "#ffffff", borderColor: darkMode ? "#4b5563" : "#e5e7eb" }}
             title="Configuración"
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -2177,7 +2430,7 @@ const App = () => {
           {sentHistory.length > 0 && (
             <button
               onClick={() => setShowHistoryPanel(true)}
-              className="relative p-1.5 rounded-full bg-white border border-gray-200 shadow-sm hover:bg-blue-50 hover:border-blue-300 transition-colors"
+              className="relative p-1.5 rounded-full border shadow-sm transition-colors" style={{ backgroundColor: darkMode ? "#374151" : "#ffffff", borderColor: darkMode ? "#4b5563" : "#e5e7eb" }}
               title="Ver historial de envíos"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -2197,6 +2450,8 @@ const App = () => {
                 "https://placehold.co/100x40/FFFFFF/000000?text=LogoVPC";
             }}
             alt="Logo VPC"
+            width="112"
+            height="45"
             className="w-20 sm:w-24 md:w-28 h-auto object-contain rounded-md"
           />
         </div>
@@ -2221,14 +2476,14 @@ const App = () => {
         )}
 
         <div className="">
-          <h1 className="text-xl sm:text-2xl font-bold text-center text-gray-800 mb-4">
+          <h1 className="text-xl sm:text-2xl font-bold text-center mb-4" style={{ color: darkMode ? "#f9fafb" : "#1f2937" }}>
             Pedidos Comercial Frutam
           </h1>
           <div className="flex items-end gap-2 mb-4">
             <div className="flex-grow">
               <label
                 htmlFor="searchTerm"
-                className="block text-sm font-medium text-gray-700"
+                className="block text-sm font-medium" style={{ color: darkMode ? "#d1d5db" : "#374151" }}
               >
                 Buscar por Mail ID:
               </label>
@@ -2239,7 +2494,7 @@ const App = () => {
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Ingrese el Mail ID (ej. 5B7D7692)"
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 bg-gray-50 border"
+                className="mt-1 block w-full rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 border transition-colors" style={{ backgroundColor: darkMode ? "#374151" : "#f9fafb", borderColor: darkMode ? "#4b5563" : "#d1d5db", color: darkMode ? "#f9fafb" : "#111827" }}
               />
             </div>
             <button
@@ -2254,37 +2509,8 @@ const App = () => {
             >
               Limpiar Búsqueda
             </button>
-          </div>
 
-          {lastSendData && !lastSendData.confirmed && (
-            <div className="flex items-center justify-between gap-2 px-4 py-2 mb-2 bg-blue-50 border border-blue-200 rounded-lg text-blue-800 text-sm">
-              <div className="flex items-center gap-2">
-                <span className="text-lg">📋</span>
-                <span>
-                  Tienes un envío listo sin confirmar —{" "}
-                  <strong>Mail ID: {lastSendData.mailId}</strong>
-                  <span className="text-blue-500 ml-2 text-xs">
-                    ({Math.round((Date.now() - lastSendData.timestamp) / 60000)} min atrás)
-                  </span>
-                </span>
-              </div>
-              <div className="flex gap-2 shrink-0">
-                <button
-                  onClick={() => setShowRecoveryModal(true)}
-                  className="px-3 py-1 bg-blue-600 text-white text-xs font-semibold rounded-md hover:bg-blue-700 transition"
-                >
-                  Recuperar
-                </button>
-                <button
-                  onClick={confirmLastSend}
-                  className="px-3 py-1 bg-gray-200 text-gray-700 text-xs font-semibold rounded-md hover:bg-gray-300 transition"
-                  title="Ya pegué el contenido correctamente"
-                >
-                  ✓ Ya envié
-                </button>
-              </div>
-            </div>
-          )}
+          </div>
 
           {otherUsersPresent.length > 0 && committedSearchTerm && (
             <div className="flex items-center gap-2 px-4 py-2 mb-2 bg-yellow-50 border border-yellow-300 rounded-lg text-yellow-800 text-sm">
@@ -2300,10 +2526,43 @@ const App = () => {
             </div>
           )}
 
+          {/* ── SUGERENCIA DE AUTOCOMPLETADO ── */}
+          {proveedorSuggestion && (
+            <div className="flex items-center gap-2 px-4 py-2 mb-2 rounded-lg text-sm"
+              style={{
+                background: darkMode ? "#1e3a5f" : "#eff6ff",
+                border: `1px solid ${darkMode ? "#3b82f6" : "#93c5fd"}`,
+                color: darkMode ? "#bfdbfe" : "#1e40af",
+              }}
+            >
+              <span className="text-lg">💡</span>
+              <span style={{ flex: 1 }}>
+                <strong>Último pedido a {proveedorSuggestion.proveedor}:</strong>
+                {" "}{[...new Set(proveedorSuggestion.items.map(i => i.especie).filter(Boolean))].join(", ")}
+                {proveedorSuggestion.nave ? ` · ${proveedorSuggestion.nave}` : ""}
+                {proveedorSuggestion.deNombrePais ? ` · ${proveedorSuggestion.deNombrePais}` : ""}
+              </span>
+              <button
+                onClick={applyProveedorSuggestion}
+                className="px-3 py-1 rounded-md text-xs font-bold text-white"
+                style={{ background: "#3b82f6", border: "none", cursor: "pointer", whiteSpace: "nowrap" }}
+              >
+                Precargar
+              </button>
+              <button
+                onClick={dismissProveedorSuggestion}
+                className="px-2 py-1 rounded-md text-xs font-semibold"
+                style={{ background: "transparent", border: `1px solid ${darkMode ? "#3b82f6" : "#93c5fd"}`, color: darkMode ? "#93c5fd" : "#1d4ed8", cursor: "pointer" }}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="block text-sm font-medium text-gray-700">
+                <label className="block text-sm font-medium" style={{ color: darkMode ? "#d1d5db" : "#374151" }}>
                   Nombre de Proveedor:
                 </label>
                 <div className={`flex rounded border shadow-sm overflow-hidden
@@ -2338,19 +2597,31 @@ const App = () => {
                 type="text"
                 name="reDestinatarios"
                 value={headerInfo.reDestinatarios === null || headerInfo.reDestinatarios === undefined ? "" : String(headerInfo.reDestinatarios)}
-                onChange={handleHeaderChange}
                 onFocus={handleFocusField}
                 onBlur={handleBlurField(handleHeaderBlur)}
+                onChange={(e) => {
+                  handleHeaderChange(e);
+                  const val = e.target.value;
+                  if (lookupDebounceRef.current) clearTimeout(lookupDebounceRef.current);
+                  lookupDebounceRef.current = setTimeout(() => {
+                    lookupLastOrderForProveedor(val);
+                  }, 600);
+                }}
                 placeholder="Ingrese nombre de proveedor"
-                className="mt-0 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 bg-gray-50 border"
+                className={`mt-0 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 border transition-colors ${
+                  currentOrderIsDeleted || (currentOrderIndex > 0 && !!headerInfo.reDestinatarios)
+                    ? "bg-gray-100 text-gray-500 cursor-not-allowed"
+                    : "bg-gray-50"
+                }`}
                 ref={(el) => (headerInputRefs.current.reDestinatarios = el)}
-                readOnly={currentOrderIsDeleted}
+                readOnly={currentOrderIsDeleted || (currentOrderIndex > 0 && !!headerInfo.reDestinatarios)}
               />
             </div>
 
             <div>
               <InputField
                 label="País:"
+                  darkMode={darkMode}
                 name="deNombrePais"
                 value={headerInfo.deNombrePais}
                 onChange={handleHeaderChange}
@@ -2364,6 +2635,7 @@ const App = () => {
             <div>
               <InputField
                 label="Nave:"
+                  darkMode={darkMode}
                 name="nave"
                 value={headerInfo.nave}
                 onChange={handleHeaderChange}
@@ -2377,6 +2649,7 @@ const App = () => {
             <div>
               <InputField
                 label="Fecha de carga:"
+                  darkMode={darkMode}
                 name="fechaCarga"
                 value={headerInfo.fechaCarga}
                 onChange={handleHeaderChange}
@@ -2391,6 +2664,7 @@ const App = () => {
             <div>
               <InputField
                 label="Exporta:"
+                  darkMode={darkMode}
                 name="exporta"
                 value={headerInfo.exporta}
                 onChange={handleHeaderChange}
@@ -2404,6 +2678,7 @@ const App = () => {
             <div>
               <InputField
                 label="Asunto del Email:"
+                  darkMode={darkMode}
                 name="emailSubject"
                 value={headerInfo.emailSubject}
                 onChange={handleHeaderChange}
@@ -2430,7 +2705,7 @@ const App = () => {
               <span className="hidden sm:inline ml-1">Anterior</span>
             </button>
 
-            <span className="text-center text-gray-700 font-semibold text-lg mx-2 sm:mx-4 min-w-[150px] sm:min-w-0">
+            <span className="text-center font-semibold text-lg mx-2 sm:mx-4 min-w-[150px] sm:min-w-0" style={{ color: darkMode ? "#d1d5db" : "#374151" }}>
               {`Pedido ${currentOrderIndex + 1} de ${displayedOrders.length}`}
               {currentOrderIsDeleted && (
                 <span className="text-red-500 ml-2">(Eliminado)</span>
@@ -2500,10 +2775,11 @@ const App = () => {
                       <td className="px-1 py-px text-xs border-r whitespace-nowrap text-center text-gray-300 select-none" title="Arrastrar para reordenar" style={{ cursor: "grab", fontSize: "16px", width: "20px" }}>
                         ⠿
                       </td>
-                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center" }}>
+                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center", borderColor: darkMode ? "#374151" : "#e5e7eb" }}>
                         <TableInput
                           type="number"
                           name="pallets"
+                          min="0"
                           value={item.pallets}
                           onChange={(e) => handleItemChange(item.id, e)}
                           onFocus={handleFocusField}
@@ -2518,7 +2794,7 @@ const App = () => {
                           }}
                         />
                       </td>
-                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center" }}>
+                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center", borderColor: darkMode ? "#374151" : "#e5e7eb" }}>
                         <TableInput
                           name="especie"
                           value={item.especie}
@@ -2536,7 +2812,7 @@ const App = () => {
                           }}
                         />
                       </td>
-                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center" }}>
+                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center", borderColor: darkMode ? "#374151" : "#e5e7eb" }}>
                         <TableInput
                           name="variedad"
                           value={item.variedad}
@@ -2554,7 +2830,7 @@ const App = () => {
                           }}
                         />
                       </td>
-                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center" }}>
+                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center", borderColor: darkMode ? "#374151" : "#e5e7eb" }}>
                         <TableInput
                           name="formato"
                           value={item.formato}
@@ -2571,7 +2847,7 @@ const App = () => {
                           }}
                         />
                       </td>
-                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center" }}>
+                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center", borderColor: darkMode ? "#374151" : "#e5e7eb" }}>
                         <TableInput
                           name="calibre"
                           value={item.calibre}
@@ -2588,7 +2864,7 @@ const App = () => {
                           }}
                         />
                       </td>
-                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center" }}>
+                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center", borderColor: darkMode ? "#374151" : "#e5e7eb" }}>
                         <TableInput
                           name="categoria"
                           value={item.categoria}
@@ -2605,7 +2881,7 @@ const App = () => {
                           }}
                         />
                       </td>
-                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center" }}>
+                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center", borderColor: darkMode ? "#374151" : "#e5e7eb" }}>
                         <TableInput
                           name="preciosFOB"
                           value={item.preciosFOB}
@@ -2673,7 +2949,7 @@ const App = () => {
                     </tr>
                   ))}
                   <tr style={{ backgroundColor: "#e0e0e0" }}>
-                    <td colSpan="7" style={{ padding: "6px 15px 6px 6px", textAlign: "right", fontWeight: "bold", border: "1px solid #ccc", borderBottomLeftRadius: "8px", marginTop: "15px" }}>
+                    <td colSpan="8" style={{ padding: "6px 15px 6px 6px", textAlign: "right", fontWeight: "bold", border: "1px solid #ccc", borderBottomLeftRadius: "8px", marginTop: "15px" }}>
                       Total de Pallets:
                     </td>
                     <td colSpan="1" style={{ padding: "6px", fontWeight: "bold", border: "1px solid #ccc", borderBottomRightRadius: "8px", textAlign: "center" }}>
@@ -2829,9 +3105,7 @@ const App = () => {
                 <h3 className="text-sm text-gray-600 text-center mb-4 leading-relaxed">
                   <strong>Instrucción importante:</strong> Después de enviar el
                   email, abre tu aplicación de correo y pega (Ctrl+V o Cmd+V) el
-                  contenido manualmente en el cuerpo del mensaje. Una vez pegado
-                  correctamente, haz click en{" "}
-                  <strong>"✓ Ya envié"</strong> en el banner azul para confirmar.
+                  contenido manualmente en el cuerpo del mensaje.
                 </h3>
               )}
 
@@ -2918,7 +3192,7 @@ const App = () => {
                 </label>
                 <textarea
                   id="modalObservation"
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 bg-gray-50 border"
+                  className="mt-1 block w-full rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 border transition-colors" style={{ backgroundColor: darkMode ? "#374151" : "#f9fafb", borderColor: darkMode ? "#4b5563" : "#d1d5db", color: darkMode ? "#f9fafb" : "#111827" }}
                   rows="4"
                   value={modalObservationText}
                   onChange={(e) => setModalObservationText(e.target.value)}
@@ -2939,47 +3213,6 @@ const App = () => {
         )}
 
         {/* Recovery Modal */}
-        {showRecoveryModal && lastSendData && (
-          <div className="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-auto">
-              <div className="flex items-center gap-3 mb-4">
-                <span className="text-3xl">📋</span>
-                <h2 className="text-xl font-bold text-gray-800">Recuperar envío</h2>
-              </div>
-              <p className="text-sm text-gray-600 mb-1">Mail ID:</p>
-              <p className="font-bold text-blue-600 text-lg mb-3">{lastSendData.mailId}</p>
-              <p className="text-sm text-gray-600 mb-1">Asunto del email:</p>
-              <div className="flex items-center gap-2 mb-4">
-                <code className="flex-1 bg-gray-50 border border-gray-200 rounded px-3 py-2 text-sm text-gray-800 break-all">
-                  {lastSendData.subject}
-                </code>
-                <button onClick={() => { navigator.clipboard.writeText(lastSendData.subject); }} className="shrink-0 px-2 py-2 bg-gray-100 hover:bg-gray-200 rounded text-xs text-gray-600 transition" title="Copiar solo el asunto">
-                  Copiar
-                </button>
-              </div>
-              <p className="text-sm text-gray-500 mb-5">
-                El contenido del pedido se volverá a copiar al portapapeles y se abrirá tu cliente de correo.
-              </p>
-              <div className="flex flex-col gap-2">
-                <button onClick={recoverLastSend} className="w-full px-4 py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition flex items-center justify-center gap-2">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" />
-                    <path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" />
-                  </svg>
-                  Volver a copiar y abrir correo
-                </button>
-                <div className="flex gap-2">
-                  <button onClick={() => { confirmLastSend(); setShowRecoveryModal(false); }} className="flex-1 px-4 py-2 bg-green-50 text-green-700 font-semibold rounded-lg border border-green-200 hover:bg-green-100 transition text-sm">
-                    ✓ Ya lo pegué correctamente
-                  </button>
-                  <button onClick={() => setShowRecoveryModal(false)} className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 font-semibold rounded-lg hover:bg-gray-200 transition text-sm">
-                    Cerrar
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Presence Conflict Modal */}
         {showPresenceModal && (
@@ -3103,29 +3336,104 @@ const App = () => {
         document.body
       )}
 
+      {/* ── WHAT'S NEW MODAL (una sola vez por versión) ────────────────────────── */}
+      {showWhatsNew && ReactDOM.createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.5)" }}>
+          <div className="rounded-2xl shadow-2xl w-full max-w-sm p-6" style={{ background: "#ffffff" }}>
+            <div className="flex items-center gap-3 mb-4">
+              <span style={{ fontSize: "28px" }}>🚀</span>
+              <div>
+                <h2 className="text-base font-bold text-gray-800">Novedades de esta versión</h2>
+                <p className="text-xs text-gray-400">Frutam · v47</p>
+              </div>
+            </div>
+            <ul className="space-y-3 mb-6">
+              {[
+                { icon: "💡", title: "Precarga de datos", desc: "Al escribir un proveedor la app sugiere automáticamente los datos del último pedido enviado, incluyendo tabla completa, pallets y precios." },
+                { icon: "🌙", title: "Modo oscuro", desc: "Activable desde el panel de configuración." },
+                { icon: "📄", title: "Nuevo Mail", desc: "Ícono en la esquina superior derecha para descartar los drafts actuales y comenzar un mail nuevo." },
+                { icon: "🔢", title: "Pallets sin negativos", desc: "El campo de pallets no acepta valores negativos." },
+                { icon: "✉️", title: "Mejoras en el HTML del mail", desc: "Render del correo mejorado visualmente para una presentación más prolija." },
+              ].map(({ icon, title, desc }) => (
+                <li key={title} className="flex gap-3 items-start">
+                  <span className="text-lg mt-0.5">{icon}</span>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-700">{title}</p>
+                    <p className="text-xs text-gray-500 leading-snug">{desc}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <button
+              onClick={() => {
+                localStorage.setItem("frutam_whatsnew_v47", "seen");
+                setShowWhatsNew(false);
+              }}
+              className="w-full py-2.5 rounded-xl text-sm font-bold text-white transition-colors hover:opacity-90"
+              style={{ background: "#2563eb" }}
+            >
+              Entendido
+            </button>
+          </div>
+        </div>,
+        document.body
+      )}
+
       {/* ── CONFIG PANEL (Portal) ─────────────────────────────────────────────── */}
       {showConfigPanel && ReactDOM.createPortal(
         <>
           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.2)", zIndex: 9998 }} onClick={() => setShowConfigPanel(false)} />
-          <div style={{ position: "fixed", top: 0, right: 0, height: "100vh", width: "300px", background: "#fff", boxShadow: "-4px 0 24px rgba(0,0,0,0.12)", zIndex: 9999, display: "flex", flexDirection: "column" }}>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div style={{ position: "fixed", top: 0, right: 0, height: "100vh", width: "300px", background: darkMode ? "#1f2937" : "#fff", boxShadow: "-4px 0 24px rgba(0,0,0,0.12)", zIndex: 9999, display: "flex", flexDirection: "column" }}>
+            <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: `1px solid ${darkMode ? "#374151" : "#f3f4f6"}` }}>
               <div className="flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" style={{ color: darkMode ? "#9ca3af" : "#6b7280" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                   <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
-                <h2 className="text-base font-bold text-gray-800">Configuración</h2>
+                <h2 className="text-base font-bold" style={{ color: darkMode ? "#f9fafb" : "#1f2937" }}>Configuración</h2>
               </div>
-              <button onClick={() => setShowConfigPanel(false)} className="text-gray-400 hover:text-gray-600 p-1 rounded transition-colors">
+              <button onClick={() => setShowConfigPanel(false)} className="p-1 rounded transition-colors" style={{ color: darkMode ? "#6b7280" : "#9ca3af" }}>
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                   <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
                 </svg>
               </button>
             </div>
-            <div className="flex-1 px-5 py-5 space-y-6">
+            <div className="flex-1 px-5 py-5 space-y-6" style={{ overflowY: "auto" }}>
+
+              {/* ── DARK MODE TOGGLE ── */}
               <div>
-                <p className="text-sm font-semibold text-gray-700 mb-1">Cliente de correo</p>
-                <p className="text-xs text-gray-400 mb-3">¿Cómo abrir el correo al hacer "Enviar Email"?</p>
+                <p className="text-sm font-semibold mb-1" style={{ color: darkMode ? "#d1d5db" : "#374151" }}>Apariencia</p>
+                <p className="text-xs mb-3" style={{ color: darkMode ? "#6b7280" : "#9ca3af" }}>Cambia entre modo claro y oscuro</p>
+                <button
+                  onClick={toggleDarkMode}
+                  className="w-full flex items-center justify-between px-4 py-3 rounded-lg border transition-all"
+                  style={{
+                    backgroundColor: darkMode ? "#374151" : "#f9fafb",
+                    borderColor: darkMode ? "#4b5563" : "#e5e7eb",
+                  }}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-lg">{darkMode ? "🌙" : "☀️"}</span>
+                    <span className="text-sm font-semibold" style={{ color: darkMode ? "#f9fafb" : "#374151" }}>
+                      {darkMode ? "Modo oscuro" : "Modo claro"}
+                    </span>
+                  </div>
+                  {/* Toggle pill */}
+                  <div
+                    className="relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0"
+                    style={{ backgroundColor: darkMode ? "#3b82f6" : "#d1d5db" }}
+                  >
+                    <div
+                      className="absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200"
+                      style={{ transform: darkMode ? "translateX(20px)" : "translateX(2px)" }}
+                    />
+                  </div>
+                </button>
+              </div>
+
+              <div style={{ borderTop: `1px solid ${darkMode ? "#374151" : "#f3f4f6"}`, paddingTop: "1.5rem" }}>
+                <p className="text-sm font-semibold mb-1" style={{ color: darkMode ? "#d1d5db" : "#374151" }}>Cliente de correo</p>
+                <p className="text-xs mb-3" style={{ color: darkMode ? "#6b7280" : "#9ca3af" }}>¿Cómo abrir el correo al hacer "Enviar Email"?</p>
                 <div className="space-y-2">
                   {[
                     { value: "auto", label: "Auto-detectar", desc: "Intenta Outlook Desktop primero, abre Outlook Web si no hay app instalada", icon: "🔍" },
@@ -3135,21 +3443,27 @@ const App = () => {
                     <button
                       key={opt.value}
                       onClick={() => saveEmailClientPref(opt.value)}
-                      className={`w-full text-left px-4 py-3 rounded-lg border transition-all ${emailClientPref === opt.value ? "border-blue-500 bg-blue-50" : "border-gray-200 bg-white hover:bg-gray-50"}`}
+                      className="w-full text-left px-4 py-3 rounded-lg border transition-all"
+                      style={{
+                        borderColor: emailClientPref === opt.value ? "#3b82f6" : darkMode ? "#4b5563" : "#e5e7eb",
+                        backgroundColor: emailClientPref === opt.value
+                          ? darkMode ? "#1e3a5f" : "#eff6ff"
+                          : darkMode ? "#374151" : "#ffffff",
+                      }}
                     >
                       <div className="flex items-center gap-2">
                         <span className="text-base">{opt.icon}</span>
-                        <span className={`text-sm font-semibold ${emailClientPref === opt.value ? "text-blue-700" : "text-gray-700"}`}>{opt.label}</span>
-                        {emailClientPref === opt.value && <span className="ml-auto text-blue-600 text-xs font-bold">✓ Activo</span>}
+                        <span className="text-sm font-semibold" style={{ color: emailClientPref === opt.value ? "#3b82f6" : darkMode ? "#d1d5db" : "#374151" }}>{opt.label}</span>
+                        {emailClientPref === opt.value && <span className="ml-auto text-blue-500 text-xs font-bold">✓ Activo</span>}
                       </div>
-                      <p className="text-xs text-gray-400 mt-1 ml-6">{opt.desc}</p>
+                      <p className="text-xs mt-1 ml-6" style={{ color: darkMode ? "#6b7280" : "#9ca3af" }}>{opt.desc}</p>
                     </button>
                   ))}
                 </div>
               </div>
             </div>
-            <div className="px-5 py-3 border-t border-gray-100">
-              <p className="text-xs text-gray-400 text-center">Preferencia guardada en este dispositivo</p>
+            <div className="px-5 py-3" style={{ borderTop: `1px solid ${darkMode ? "#374151" : "#f3f4f6"}` }}>
+              <p className="text-xs text-center" style={{ color: darkMode ? "#6b7280" : "#9ca3af" }}>Preferencia guardada en este dispositivo</p>
             </div>
           </div>
         </>,
@@ -3162,13 +3476,13 @@ const App = () => {
         left: "50%",
         transform: "translateX(-50%)",
         fontSize: "11px",
-        color: "#9ca3af",
+        color: darkMode ? "#4b5563" : "#9ca3af",
         pointerEvents: "none",
         userSelect: "none",
         whiteSpace: "nowrap",
         zIndex: 10,
       }}>
-        v35.0 · 08 Mar 2026
+        v47.0 · 08 Mar 2026
       </div>
     </div>
   );

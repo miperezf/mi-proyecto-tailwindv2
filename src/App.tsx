@@ -1740,19 +1740,21 @@ const App = () => {
   const handleNewMail = async () => {
     if (!db || !userId) return;
 
+    // Reset refs BEFORE soft-delete so no stale proveedor leaks into new draft
+    headerInfoRef.current = { ...initialHeaderState };
+    orderItemsRef.current = [{ ...initialItemState, id: crypto.randomUUID() }];
+    activeOrderIdRef.current = null;
+
     // Soft-delete all current drafts
     const currentDrafts = displayedOrders.filter(o => o.header?.status === "draft");
     await Promise.all(currentDrafts.map(o => handleSoftDeleteOrderInFirestore(o.id)));
 
-    // Reset UI immediately
+    // Reset all UI state
     setDisplayedOrders([]);
     setActiveOrderId(null);
-    activeOrderIdRef.current = null;
     setCurrentOrderIndex(0);
     setHeaderInfo({ ...initialHeaderState });
-    headerInfoRef.current = { ...initialHeaderState };
     setOrderItems([{ ...initialItemState, id: crypto.randomUUID() }]);
-    orderItemsRef.current = [{ ...initialItemState, id: crypto.randomUUID() }];
     setProveedorSuggestion(null);
     if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
     suggestionAppliedRef.current = "";
@@ -1760,7 +1762,7 @@ const App = () => {
     setSearchTerm("");
     setCommittedSearchTerm("");
 
-    // Create fresh draft with new mailId
+    // Load drafts — finds 0, creates fresh one with new mailId and empty proveedor
     await loadMyDrafts();
   };
 

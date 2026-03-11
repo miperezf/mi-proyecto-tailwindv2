@@ -1980,22 +1980,20 @@ const App = () => {
         return dateA - dateB;
       });
       for (const order of ordersToProcess) {
-        if (order.header?.status === "draft") {
-          // ── v21 SECURITY FIX: only flip status on documents owned by the
-          // current user. The mailId query (above) returns ALL docs with that
-          // mailId — including docs created by other users who share the same
-          // mailID. Without this guard, User A's "Send" would mark User B's
-          // draft as "sent" in Firestore without B's consent.
-          if (order.header?.createdBy && order.header.createdBy !== userId) {
-            continue;
-          }
+        // Security: only write docs owned by the current user
+        if (order.header?.createdBy && order.header.createdBy !== userId) {
+          continue;
+        }
 
-          const orderDocRef = doc(
-            db,
-            `artifacts/${appId}/public/data/pedidos`,
-            order.id
-          );
-          const isActiveOrder = order.id === activeOrderId;
+        const orderDocRef = doc(
+          db,
+          `artifacts/${appId}/public/data/pedidos`,
+          order.id
+        );
+        const isActiveOrder = order.id === activeOrderIdRef.current;
+
+        if (order.header?.status === "draft") {
+          // ── DRAFT: flip to sent + persist items
           const updatePayload = {
             "header.mailId": mailGlobalId,
             "header.status": "sent",
@@ -2006,13 +2004,27 @@ const App = () => {
             updatePayload["items"] = JSON.stringify(latestItems);
           }
           await updateDoc(orderDocRef, updatePayload);
-          // Avoid direct mutation of React state objects — update via index
           const idx = ordersToProcess.indexOf(order);
           if (idx !== -1) {
             ordersToProcess[idx] = {
               ...order,
               header: { ...order.header, status: "sent", mailId: mailGlobalId }
             };
+          }
+        } else if (order.header?.status === "sent") {
+          // ── SENT MODE FIX: persist local edits (e.g. price changes) back to
+          // Firestore. displayedOrders already has the updated items — write them
+          // now so the next search returns the correct values.
+          const localOrder = displayedOrders.find((o) => o.id === order.id);
+          if (localOrder) {
+            const updatedItems = isActiveOrder
+              ? latestItems
+              : localOrder.items;
+            await updateDoc(orderDocRef, {
+              items: JSON.stringify(updatedItems),
+              "header.lastModifiedBy": userId,
+              "header.updatedAt": Date.now(),
+            });
           }
         }
       }
@@ -3636,7 +3648,7 @@ const App = () => {
         whiteSpace: "nowrap",
         zIndex: 10,
       }}>
-        v48.2 · 11 Mar 2026
+        v48.3 · 11 Mar 2026
       </div>
     </div>
   );

@@ -126,13 +126,42 @@ const TableInput = React.forwardRef(
   }
 );
 
+const initialHeaderState = {
+  reDestinatarios: "",
+  deNombrePais: "",
+  nave: "",
+  fechaCarga: "",
+  exporta: "",
+  emailSubject: "",
+  mailId: "",
+  incoterm: "FOB",
+  status: "draft",
+  createdAt: null,
+  createdBy: null,
+  lastModifiedBy: null,
+  updatedAt: null,
+};
+
+const initialItemState = {
+  id: "",  // always overridden with crypto.randomUUID() at call site
+  pallets: "",
+  especie: "",
+  variedad: "",
+  formato: "",
+  calibre: "",
+  categoria: "",
+  preciosFOB: "",
+  estado: "",
+  isCanceled: false,
+};
+
 const App = () => {
   const appId =
     typeof __app_id !== "undefined" ? __app_id : firebaseConfig.projectId;
 
   const [userId, setUserId] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [allOrdersFromFirestore, setAllOrdersFromFirestore] = useState([]);
   const [displayedOrders, setDisplayedOrders] = useState([]);
 
@@ -421,7 +450,7 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Detalle de Pedido</title>
 </head>
-<body style="margin:0;padding:16px 16px 16px 32px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
   <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${mailId}</div>
   <div>
     ${innerEmailContentHtml}
@@ -601,40 +630,14 @@ const App = () => {
     return subject;
   };
 
-  const initialHeaderState = {
-    reDestinatarios: "",
-    deNombrePais: "",
-    nave: "",
-    fechaCarga: "",
-    exporta: "",
-    emailSubject: "",
-    mailId: "",
-    incoterm: "FOB",
-    status: "draft",
-    createdAt: null,
-    createdBy: null,
-    lastModifiedBy: null,
-    updatedAt: null,
-  };
-  const initialItemState = {
-    id: crypto.randomUUID(),
-    pallets: "",
-    especie: "",
-    variedad: "",
-    formato: "",
-    calibre: "",
-    categoria: "",
-    preciosFOB: "",
-    estado: "",
-    isCanceled: false,
-  };
+  // initialHeaderState and initialItemState defined at module level (below)
 
   const [headerInfo, setHeaderInfo] = useState(() => ({
     ...initialHeaderState,
     emailSubject: generateEmailSubjectValue([], []),
   }));
 
-  const [orderItems, setOrderItems] = useState([initialItemState]);
+  const [orderItems, setOrderItems] = useState([{ ...initialItemState, id: crypto.randomUUID() }]);
   const [currentOrderIndex, setCurrentOrderIndex] = useState(0);
   const [showOrderActionsModal, setShowOrderActionsModal] = useState(false);
   const [previewHtmlContent, setPreviewHtmlContent] = useState("");
@@ -916,9 +919,24 @@ const App = () => {
     }
   };
 
-  const loadMyDrafts = async () => {
+  const purgeMyDrafts = async () => {
+    // Soft-delete todos los drafts existentes del usuario antes de crear uno nuevo
     if (!db || !userId) return;
-    setIsLoading(true);
+    const ordersCollectionRef = collection(db, `artifacts/${appId}/public/data/pedidos`);
+    const q = query(
+      ordersCollectionRef,
+      where("header.createdBy", "==", userId),
+      where("header.status", "==", "draft")
+    );
+    const snapshot = await getDocs(q);
+    await Promise.all(
+      snapshot.docs.map((d) => handleSoftDeleteOrderInFirestore(d.id))
+    );
+  };
+
+  const loadMyDrafts = async ({ silent = false } = {}) => {
+    if (!db || !userId) return;
+    if (!silent) setIsLoading(true);
     try {
       const ordersCollectionRef = collection(db, `artifacts/${appId}/public/data/pedidos`);
       const q = query(
@@ -929,7 +947,15 @@ const App = () => {
       const snapshot = await getDocs(q);
       // ── v22 FIX: guard against setState after unmount
       if (!isMountedRef.current) return;
-      const drafts = parseFirestoreOrders(snapshot.docs);
+      // Si es llamada silenciosa (limpiar/nuevo mail) purgar y crear draft limpio
+      // Si es llamada normal (post-send) usar drafts existentes
+      let drafts = parseFirestoreOrders(snapshot.docs);
+
+      if (silent) {
+        // Purgar todos los drafts acumulados y empezar con uno nuevo
+        await Promise.all(drafts.map((d) => handleSoftDeleteOrderInFirestore(d.id)));
+        drafts = [];
+      }
 
       if (drafts.length === 0) {
         const newRef = doc(ordersCollectionRef);
@@ -948,6 +974,9 @@ const App = () => {
         const newDraft = { id: newRef.id, header: newHeader, items: newItems };
         setDisplayedOrders([newDraft]);
         setActiveOrderId(newRef.id);
+        activeOrderIdRef.current = newRef.id;
+        headerInfoRef.current = newHeader;
+        orderItemsRef.current = newItems;
         setHeaderInfo(newHeader);
         setOrderItems(newItems);
         setCurrentOrderIndex(0);
@@ -956,6 +985,9 @@ const App = () => {
         setDisplayedOrders(drafts);
         const firstId = drafts[0].id;
         setActiveOrderId(firstId);
+        activeOrderIdRef.current = firstId;
+        headerInfoRef.current = drafts[0].header;
+        orderItemsRef.current = drafts[0].items;
         setHeaderInfo(drafts[0].header);
         setOrderItems(drafts[0].items);
         setCurrentOrderIndex(0);
@@ -1010,16 +1042,18 @@ const App = () => {
         setActiveOrderId(null);
         setCurrentOrderIndex(0);
       } else {
-        const asDrafts = orders.map((o) => ({
-          ...o,
-          header: { ...o.header, status: "draft" },
-        }));
-        setDisplayedOrders(asDrafts);
-        const last = asDrafts[asDrafts.length - 1];
+        // ── BUG FIX: keep original status from Firestore — never force "draft"
+        // Mutating sent→draft here was causing flushAndSave to persist "draft"
+        // back to Firestore and handleNewMail to soft-delete sent orders.
+        setDisplayedOrders(orders);
+        const last = orders[orders.length - 1];
         setActiveOrderId(last.id);
+        activeOrderIdRef.current = last.id;
+        headerInfoRef.current = last.header;
+        orderItemsRef.current = last.items;
         setHeaderInfo(last.header);
         setOrderItems(last.items);
-        setCurrentOrderIndex(asDrafts.length - 1);
+        setCurrentOrderIndex(orders.length - 1);
       }
     } catch (err) {
       console.error("searchByMailId error:", err);
@@ -1029,8 +1063,45 @@ const App = () => {
   };
 
   useEffect(() => {
-    if (!isAuthReady || !userId) return;
-    loadMyDrafts();
+    if (!isAuthReady || !userId || !db) return;
+    // Al montar: crear un pedido en blanco nuevo, sin cargar drafts anteriores.
+    // El usuario parte desde cero cada sesión — puede buscar un mailID existente
+    // o simplemente empezar a armar un pedido nuevo.
+    const initBlankOrder = async () => {
+      setIsLoading(true);
+      try {
+        // Purgar drafts huérfanos antes de crear uno nuevo
+        await purgeMyDrafts();
+        const ordersCollectionRef = collection(db, `artifacts/${appId}/public/data/pedidos`);
+        const newRef = doc(ordersCollectionRef);
+        const newHeader = {
+          ...initialHeaderState,
+          mailId: crypto.randomUUID().substring(0, 8).toUpperCase(),
+          emailSubject: generateEmailSubjectValue([], []),
+          status: "draft",
+          createdAt: Date.now(),
+          createdBy: userId,
+          updatedAt: Date.now(),
+        };
+        const newItems = [{ ...initialItemState, id: crypto.randomUUID() }];
+        await saveOrderToFirestore({ id: newRef.id, isNew: true, header: newHeader, items: newItems });
+        if (!isMountedRef.current) return;
+        const newDraft = { id: newRef.id, header: newHeader, items: newItems };
+        setDisplayedOrders([newDraft]);
+        setActiveOrderId(newRef.id);
+        activeOrderIdRef.current = newRef.id;
+        setHeaderInfo(newHeader);
+        headerInfoRef.current = newHeader;
+        setOrderItems(newItems);
+        orderItemsRef.current = newItems;
+        setCurrentOrderIndex(0);
+      } catch (err) {
+        console.error("initBlankOrder error:", err);
+      } finally {
+        if (isMountedRef.current) setIsLoading(false);
+      }
+    };
+    initBlankOrder();
   }, [isAuthReady, userId]);
 
   // ── v20 ARCHITECTURE: Single flush helper used by ALL action functions.
@@ -1042,6 +1113,11 @@ const App = () => {
     explicitItems = null
   ) => {
     if (!db || !userId || !activeOrderIdRef.current) return;
+    // Never auto-save a sent order — only drafts should be written by autosave/flush
+    const activeOrderStatus = displayedOrders.find(
+      (o) => o.id === activeOrderIdRef.current
+    )?.header?.status;
+    if (activeOrderStatus === "sent") return;
 
     // Always read from refs — never from closures
     const snapshotHeader = explicitHeader ?? headerInfoRef.current;
@@ -1606,11 +1682,8 @@ const App = () => {
     });
 
     const newOrder = { id: newOrderId, header: newBlankHeader, items: newBlankItems };
-    setDisplayedOrders((prev) => {
-      const updated = [...prev, newOrder];
-      setCurrentOrderIndex(updated.length - 1);
-      return updated;
-    });
+    setDisplayedOrders((prev) => [...prev, newOrder]);
+    setCurrentOrderIndex(displayedOrders.length); // length before adding = new last index
     setActiveOrderId(newOrderId);
     setHeaderInfo(newBlankHeader);
     setOrderItems(newBlankItems);
@@ -1662,7 +1735,15 @@ const App = () => {
         setOrderItems(target.items);
         setCurrentOrderIndex(newIndex);
       } else {
-        await loadMyDrafts();
+        // No quedan pedidos — dejar UI vacía, no recargar drafts automáticamente
+        setDisplayedOrders([]);
+        setActiveOrderId(null);
+        activeOrderIdRef.current = null;
+        setCurrentOrderIndex(0);
+        setHeaderInfo({ ...initialHeaderState });
+        headerInfoRef.current = { ...initialHeaderState };
+        setOrderItems([{ ...initialItemState, id: crypto.randomUUID() }]);
+        orderItemsRef.current = [{ ...initialItemState, id: crypto.randomUUID() }];
       }
     } catch (error) {
     }
@@ -1704,7 +1785,11 @@ const App = () => {
   };
 
   const handleClearSearch = async () => {
-    if (activeOrderId) {
+    // Use ref for activeOrderId to avoid stale closure — check status via displayedOrders
+    const activeStatus = displayedOrders.find(
+      (o) => o.id === activeOrderIdRef.current
+    )?.header?.status;
+    if (activeOrderIdRef.current && activeStatus !== "sent") {
       await flushAndSave();
     }
 
@@ -1734,7 +1819,7 @@ const App = () => {
     if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
     suggestionAppliedRef.current = "";
 
-    await loadMyDrafts();
+    await loadMyDrafts({ silent: true });
   };
 
   const handleNewMail = async () => {
@@ -1763,7 +1848,7 @@ const App = () => {
     setCommittedSearchTerm("");
 
     // Load drafts — finds 0, creates fresh one with new mailId and empty proveedor
-    await loadMyDrafts();
+    await loadMyDrafts({ silent: true });
   };
 
   const isMobileDevice = () => {
@@ -1804,6 +1889,7 @@ const App = () => {
         );
         const ordersToGroupSnapshot = await getDocs(ordersToGroupQuery);
         const batch = writeBatch(db);
+        let mutationCount = 0;
 
         ordersToGroupSnapshot.docs.forEach((docSnapshot) => {
           const orderData = docSnapshot.data();
@@ -1821,10 +1907,11 @@ const App = () => {
               docSnapshot.id
             );
             batch.update(orderRef, { "header.mailId": mailGlobalId });
+            mutationCount++;
           }
         });
 
-        if (batch._mutations.length > 0) {
+        if (mutationCount > 0) {
           await batch.commit();
         }
       }
@@ -1900,8 +1987,14 @@ const App = () => {
             updatePayload["items"] = JSON.stringify(latestItems);
           }
           await updateDoc(orderDocRef, updatePayload);
-          order.header.status = "sent";
-          order.header.mailId = mailGlobalId;
+          // Avoid direct mutation of React state objects — update via index
+          const idx = ordersToProcess.indexOf(order);
+          if (idx !== -1) {
+            ordersToProcess[idx] = {
+              ...order,
+              header: { ...order.header, status: "sent", mailId: mailGlobalId }
+            };
+          }
         }
       }
 
@@ -1949,7 +2042,7 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Detalle de Pedido</title>
 </head>
-<body style="margin:0;padding:16px 16px 16px 32px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
   <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${mailGlobalId}</div>
   <div>
     ${innerEmailContentHtml}
@@ -1980,7 +2073,7 @@ const App = () => {
         return [...notSentYet, ...nowSent, ...alreadySent];
       });
 
-      await loadMyDrafts();
+      await loadMyDrafts({ silent: true });
     } catch (error) {
     }
   };
@@ -2017,6 +2110,7 @@ const App = () => {
       );
       const ordersToGroupSnapshot = await getDocs(ordersToGroupQuery);
       const batch = writeBatch(db);
+      let mutationCount = 0;
 
       ordersToGroupSnapshot.docs.forEach((docSnapshot) => {
         const orderData = docSnapshot.data();
@@ -2032,10 +2126,11 @@ const App = () => {
             docSnapshot.id
           );
           batch.update(orderRef, { "header.mailId": previewGlobalId });
+          mutationCount++;
         }
       });
 
-      if (batch._mutations.length > 0) {
+      if (mutationCount > 0) {
         await batch.commit();
       }
     }
@@ -2111,7 +2206,7 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Previsualización de Pedido</title>
 </head>
-<body style="margin:0;padding:16px 16px 16px 32px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
   <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${previewGlobalId}</div>
   <div>
     ${innerPreviewHtml}

@@ -302,7 +302,6 @@ const App = () => {
       }, 12000);
 
     } catch (e) {
-      console.error(`${TAG} ERROR:`, e);
     }
   };
 
@@ -450,7 +449,7 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Detalle de Pedido</title>
 </head>
-<body style="margin:0;padding:16px 16px 16px 32px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
   <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${mailId}</div>
   <div>
     ${innerEmailContentHtml}
@@ -911,7 +910,6 @@ const App = () => {
       );
       setAllOrdersFromFirestore([...currentDrafts, ...sentOrders]);
     } catch (err) {
-      console.error("loadSentHistory error:", err);
       setAllOrdersFromFirestore((prev) => {
         const existingSent = prev.filter((o) => o.header?.status === "sent");
         return [...currentDrafts, ...existingSent];
@@ -994,7 +992,6 @@ const App = () => {
         await loadSentHistory(drafts);
       }
     } catch (err) {
-      console.error("loadMyDrafts error:", err);
     } finally {
       if (isMountedRef.current) setIsLoading(false);
     }
@@ -1056,7 +1053,6 @@ const App = () => {
         setCurrentOrderIndex(orders.length - 1);
       }
     } catch (err) {
-      console.error("searchByMailId error:", err);
     } finally {
       if (isMountedRef.current) setIsLoading(false);
     }
@@ -1096,7 +1092,6 @@ const App = () => {
         orderItemsRef.current = newItems;
         setCurrentOrderIndex(0);
       } catch (err) {
-        console.error("initBlankOrder error:", err);
       } finally {
         if (isMountedRef.current) setIsLoading(false);
       }
@@ -1136,15 +1131,10 @@ const App = () => {
       (o) => o.id === activeOrderIdRef.current
     )?.header?.status;
     const isViewingSearchedMail = !!committedSearchTermRef.current;
-    console.log("[SAVE] SENT MODE GUARD — isViewingSearchedMail:", isViewingSearchedMail, "activeOrderStatus:", activeOrderStatus);
     if (isViewingSearchedMail && activeOrderStatus === "sent") {
-      console.log("[SAVE] BLOCKED by SENT MODE GUARD — not writing to Firestore");
       return;
     }
-
-    console.log("[SAVE] Writing to Firestore:", currentOrderData.id);
     await saveOrderToFirestore(currentOrderData);
-    console.log("[SAVE] Firestore write complete");
   };
 
   // ── v20: Central flush used by all action functions (navigate/send/preview/
@@ -1156,7 +1146,6 @@ const App = () => {
   // has focus (no blur has fired yet), the onBlur formatting handler runs
   // and the formatted value is captured in the ref before we save.
   const flushAndSave = async () => {
-    console.log("[FLUSH] flushAndSave called — committedSearchTermRef:", committedSearchTermRef.current);
     // Force blur so that any pending onBlur handlers (formatters) run
     if (document.activeElement && document.activeElement !== document.body) {
       document.activeElement.blur();
@@ -1875,7 +1864,6 @@ const App = () => {
       // React state reads inside async functions after an await may return
       // stale values — this snapshot is always current.
       const displayedOrdersSnapshot = displayedOrders;
-      console.log("[SEND] 1. START — displayedOrdersSnapshot:", JSON.stringify(displayedOrdersSnapshot.map(o => ({id: o.id, status: o.header?.status, preciosFOB: o.items?.[0]?.preciosFOB}))));
 
       // Flush any pending blur state then persist to Firestore before acting
       await flushAndSave();
@@ -1883,8 +1871,6 @@ const App = () => {
       // Read the authoritative state from refs (always current after flush)
       const latestHeader = headerInfoRef.current;
       const latestItems  = orderItemsRef.current;
-      console.log("[SEND] 2. latestItems:", JSON.stringify(latestItems));
-      console.log("[SEND] 3. committedSearchTermRef:", committedSearchTermRef.current);
 
       const mailGlobalId = latestHeader.mailId;
 
@@ -1901,14 +1887,12 @@ const App = () => {
       let ordersToProcess;
 
       if (committedSearchTermRef.current) {
-        console.log("[SEND] 4. SENT MODE — building ordersToProcess from snapshot");
         ordersToProcess = displayedOrdersSnapshot
           .filter((o) => o.header?.status !== "deleted")
           .map((o) => o.id === activeOrderIdRef.current
             ? { ...o, header: { ...latestHeader }, items: latestItems.map(i => ({ ...i })) }
             : { ...o }
           );
-        console.log("[SEND] 5. ordersToProcess built:", ordersToProcess.map(o => ({id: o.id, status: o.header?.status, items: o.items})));
       } else {
         // ── DRAFT MODE: group drafts by mailId, then merge local state
         const currentProveedor = latestHeader.reDestinatarios;
@@ -1992,26 +1976,19 @@ const App = () => {
         const dateB = b.header?.createdAt || 0;
         return dateA - dateB;
       });
-      console.log("[SEND] 6. Starting write loop. ordersToProcess.length:", ordersToProcess.length);
       for (const order of ordersToProcess) {
-        console.log("[SEND] 7. Processing order:", order.id, "status:", order.header?.status, "createdBy:", order.header?.createdBy, "userId:", userId);
-
-        // Security: only write docs owned by the current user
-        if (order.header?.createdBy && order.header.createdBy !== userId) {
-          console.log("[SEND] 7a. SKIPPED — createdBy !== userId");
-          continue;
-        }
-
         const orderDocRef = doc(
           db,
           `artifacts/${appId}/public/data/pedidos`,
           order.id
         );
         const isActiveOrder = order.id === activeOrderIdRef.current;
-        console.log("[SEND] 8. isActiveOrder:", isActiveOrder);
 
         if (order.header?.status === "draft") {
-          console.log("[SEND] 9. DRAFT — writing to Firestore");
+          // DRAFT: solo el creador puede cambiar status a sent
+          if (order.header?.createdBy && order.header.createdBy !== userId) {
+            continue;
+          }
           const updatePayload = {
             "header.mailId": mailGlobalId,
             "header.status": "sent",
@@ -2022,7 +1999,6 @@ const App = () => {
             updatePayload["items"] = JSON.stringify(latestItems);
           }
           await updateDoc(orderDocRef, updatePayload);
-          console.log("[SEND] 9a. DRAFT write complete");
           const idx = ordersToProcess.indexOf(order);
           if (idx !== -1) {
             ordersToProcess[idx] = {
@@ -2031,23 +2007,18 @@ const App = () => {
             };
           }
         } else if (order.header?.status === "sent") {
+          // SENT: cualquier usuario puede persistir ediciones — no hay cambio de
+          // ownership, solo se actualizan items. El guard de createdBy NO aplica
+          // aquí porque el pedido ya fue enviado y cualquier usuario del equipo
+          // puede corregir precios y re-enviar.
           const updatedItems = isActiveOrder ? latestItems : order.items;
-          console.log("[SEND] 10. SENT — writing items to Firestore. updatedItems:", updatedItems);
-          try {
-            await updateDoc(orderDocRef, {
-              items: JSON.stringify(updatedItems),
-              "header.lastModifiedBy": userId,
-              "header.updatedAt": Date.now(),
-            });
-            console.log("[SEND] 10a. SENT write complete ✅");
-          } catch (writeErr) {
-            console.error("[SEND] 10b. SENT write FAILED ❌", writeErr);
-          }
-        } else {
-          console.log("[SEND] 11. UNKNOWN status — not writing:", order.header?.status);
+          await updateDoc(orderDocRef, {
+            items: JSON.stringify(updatedItems),
+            "header.lastModifiedBy": userId,
+            "header.updatedAt": Date.now(),
+          });
         }
       }
-      console.log("[SEND] 12. Write loop complete");
 
       if (ordersToProcess.length === 0) {
         setPreviewHtmlContent(
@@ -2093,7 +2064,7 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Detalle de Pedido</title>
 </head>
-<body style="margin:0;padding:16px 16px 16px 32px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
   <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${mailGlobalId}</div>
   <div>
     ${innerEmailContentHtml}
@@ -2280,7 +2251,7 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Previsualización de Pedido</title>
 </head>
-<body style="margin:0;padding:16px 16px 16px 32px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
   <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${previewGlobalId}</div>
   <div>
     ${innerPreviewHtml}
@@ -3137,7 +3108,7 @@ const App = () => {
                     </tr>
                   ))}
                   <tr style={{ backgroundColor: "#e0e0e0" }}>
-                    <td colSpan="7" style={{ padding: "6px 15px 6px 6px", textAlign: "right", fontWeight: "bold", border: "1px solid #ccc", borderBottomLeftRadius: "8px", marginTop: "15px" }}>
+                    <td colSpan="8" style={{ padding: "6px 15px 6px 6px", textAlign: "right", fontWeight: "bold", border: "1px solid #ccc", borderBottomLeftRadius: "8px", marginTop: "15px" }}>
                       Total de Pallets:
                     </td>
                     <td colSpan="1" style={{ padding: "6px", fontWeight: "bold", border: "1px solid #ccc", borderBottomRightRadius: "8px", textAlign: "center" }}>
@@ -3670,7 +3641,7 @@ const App = () => {
         whiteSpace: "nowrap",
         zIndex: 10,
       }}>
-        v48.4-debug · 11 Mar 2026
+        v48.5 · 11 Mar 2026
       </div>
     </div>
   );

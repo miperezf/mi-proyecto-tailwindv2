@@ -450,7 +450,7 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Detalle de Pedido</title>
 </head>
-<body style="margin:0;padding:16px 16px 16px 32px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
   <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${mailId}</div>
   <div>
     ${innerEmailContentHtml}
@@ -2046,7 +2046,7 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Detalle de Pedido</title>
 </head>
-<body style="margin:0;padding:16px 16px 16px 32px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
   <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${mailGlobalId}</div>
   <div>
     ${innerEmailContentHtml}
@@ -2210,7 +2210,7 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Previsualización de Pedido</title>
 </head>
-<body style="margin:0;padding:16px 16px 16px 32px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
   <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${previewGlobalId}</div>
   <div>
     ${innerPreviewHtml}

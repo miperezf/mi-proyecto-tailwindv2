@@ -1885,79 +1885,93 @@ const App = () => {
         `artifacts/${appId}/public/data/pedidos`
       );
 
-      const currentProveedor = latestHeader.reDestinatarios;
-      if (currentProveedor && mailGlobalId) {
-        const ordersToGroupQuery = query(
+      let ordersToProcess;
+
+      if (committedSearchTermRef.current) {
+        // ── SENT MODE: use displayedOrders directly — they already have all local edits.
+        // Querying Firestore here would return stale values for unsaved changes.
+        ordersToProcess = displayedOrders
+          .filter((o) => o.header?.status !== "deleted")
+          .map((o) => o.id === activeOrderIdRef.current
+            ? { ...o, header: { ...latestHeader }, items: latestItems.map(i => ({ ...i })) }
+            : { ...o }
+          );
+      } else {
+        // ── DRAFT MODE: group drafts by mailId, then merge local state
+        const currentProveedor = latestHeader.reDestinatarios;
+        if (currentProveedor && mailGlobalId) {
+          const ordersToGroupQuery = query(
+            ordersCollectionRef,
+            where("header.status", "==", "draft"),
+            where("header.reDestinatarios", "==", currentProveedor)
+          );
+          const ordersToGroupSnapshot = await getDocs(ordersToGroupQuery);
+          const batch = writeBatch(db);
+          let mutationCount = 0;
+
+          ordersToGroupSnapshot.docs.forEach((docSnapshot) => {
+            const orderData = docSnapshot.data();
+            const existingMailId = orderData.header?.mailId;
+            const docCreatedBy = orderData.header?.createdBy;
+
+            if (docCreatedBy !== userId) {
+              return;
+            }
+
+            if (!existingMailId || existingMailId !== mailGlobalId) {
+              const orderRef = doc(
+                db,
+                `artifacts/${appId}/public/data/pedidos`,
+                docSnapshot.id
+              );
+              batch.update(orderRef, { "header.mailId": mailGlobalId });
+              mutationCount++;
+            }
+          });
+
+          if (mutationCount > 0) {
+            await batch.commit();
+          }
+        }
+
+        const q = query(
           ordersCollectionRef,
-          where("header.status", "==", "draft"),
-          where("header.reDestinatarios", "==", currentProveedor)
+          where("header.mailId", "==", mailGlobalId)
         );
-        const ordersToGroupSnapshot = await getDocs(ordersToGroupQuery);
-        const batch = writeBatch(db);
-        let mutationCount = 0;
+        const querySnapshot = await getDocs(q);
 
-        ordersToGroupSnapshot.docs.forEach((docSnapshot) => {
-          const orderData = docSnapshot.data();
-          const existingMailId = orderData.header?.mailId;
-          const docCreatedBy = orderData.header?.createdBy;
+        ordersToProcess = querySnapshot.docs.map((doc) => ({
+          id: doc.id,
+          header: doc.data().header,
+          items: JSON.parse(doc.data().items || "[]"),
+        }));
 
-          if (docCreatedBy !== userId) {
-            return;
+        ordersToProcess = ordersToProcess.filter(
+          (order) => order.header?.status !== "deleted"
+        );
+
+        const activeOrderCurrentState = {
+          id: activeOrderId,
+          header: { ...latestHeader },
+          items: latestItems.map((item) => ({ ...item })),
+        };
+
+        const existingIndexInProcess = ordersToProcess.findIndex(
+          (o) => o.id === activeOrderId
+        );
+        if (existingIndexInProcess !== -1) {
+          if (activeOrderCurrentState.header?.status !== "deleted") {
+            ordersToProcess[existingIndexInProcess] = activeOrderCurrentState;
+          } else {
+            ordersToProcess.splice(existingIndexInProcess, 1);
           }
-
-          if (!existingMailId || existingMailId !== mailGlobalId) {
-            const orderRef = doc(
-              db,
-              `artifacts/${appId}/public/data/pedidos`,
-              docSnapshot.id
-            );
-            batch.update(orderRef, { "header.mailId": mailGlobalId });
-            mutationCount++;
-          }
-        });
-
-        if (mutationCount > 0) {
-          await batch.commit();
+        } else if (
+          activeOrderCurrentState.id &&
+          activeOrderCurrentState.header?.mailId === mailGlobalId &&
+          activeOrderCurrentState.header?.status !== "deleted"
+        ) {
+          ordersToProcess.push(activeOrderCurrentState);
         }
-      }
-      const q = query(
-        ordersCollectionRef,
-        where("header.mailId", "==", mailGlobalId)
-      );
-      const querySnapshot = await getDocs(q);
-
-      let ordersToProcess = querySnapshot.docs.map((doc) => ({
-        id: doc.id,
-        header: doc.data().header,
-        items: JSON.parse(doc.data().items || "[]"),
-      }));
-
-      ordersToProcess = ordersToProcess.filter(
-        (order) => order.header?.status !== "deleted"
-      );
-
-      const activeOrderCurrentState = {
-        id: activeOrderId,
-        // ── v19 FIX (Bug 2): use the ref-flushed snapshot, not the stale closure
-        header: { ...latestHeader },
-        items: latestItems.map((item) => ({ ...item })),
-      };
-
-      const existingIndexInProcess = ordersToProcess.findIndex(
-        (o) => o.id === activeOrderId
-      );
-      if (existingIndexInProcess !== -1) {
-        if (activeOrderCurrentState.header?.status !== "deleted") {
-          ordersToProcess[existingIndexInProcess] = activeOrderCurrentState;
-        } else {
-          ordersToProcess.splice(existingIndexInProcess, 1);
-        }
-      } else if (
-        activeOrderCurrentState.id &&
-        activeOrderCurrentState.header?.mailId === mailGlobalId &&
-        activeOrderCurrentState.header?.status !== "deleted"
-      ) {
-        ordersToProcess.push(activeOrderCurrentState);
       }
 
       ordersToProcess.sort((a, b) => {
@@ -2084,7 +2098,15 @@ const App = () => {
   };
 
   const handlePreviewOrder = async () => {
-    await flushAndSave();
+    // Force blur so pending onBlur formatters run before reading refs
+    if (document.activeElement && document.activeElement !== document.body) {
+      document.activeElement.blur();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    if (pendingSaveTimeout.current) {
+      clearTimeout(pendingSaveTimeout.current);
+      pendingSaveTimeout.current = null;
+    }
 
     // Read from refs after flush
     const latestItems  = orderItemsRef.current;
@@ -2100,83 +2122,96 @@ const App = () => {
       return;
     }
 
-    const ordersCollectionRef = collection(
-      db,
-      `artifacts/${appId}/public/data/pedidos`
-    );
+    let ordersForPreview;
 
-    // ── v19 FIX: use latestHeader throughout (not stale headerInfo closure)
-    const currentProveedor = latestHeader.reDestinatarios;
-    if (currentProveedor && previewGlobalId) {
-      const ordersToGroupQuery = query(
-        ordersCollectionRef,
-        where("header.status", "==", "draft"),
-        where("header.reDestinatarios", "==", currentProveedor)
+    if (committedSearchTermRef.current) {
+      // ── SENT MODE: use displayedOrders directly — they already have all local edits.
+      // Do NOT query Firestore here (it would return stale values for unsaved changes).
+      ordersForPreview = displayedOrders
+        .filter((o) => o.header?.status !== "deleted")
+        .map((o) => o.id === activeOrderIdRef.current
+          ? { ...o, header: { ...latestHeader }, items: latestItems.map(i => ({ ...i })) }
+          : { ...o }
+        );
+    } else {
+      // ── DRAFT MODE: query Firestore to group drafts by mailId, then merge local state
+      const ordersCollectionRef = collection(
+        db,
+        `artifacts/${appId}/public/data/pedidos`
       );
-      const ordersToGroupSnapshot = await getDocs(ordersToGroupQuery);
-      const batch = writeBatch(db);
-      let mutationCount = 0;
 
-      ordersToGroupSnapshot.docs.forEach((docSnapshot) => {
-        const orderData = docSnapshot.data();
-        const existingMailId = orderData.header?.mailId;
-        const docCreatedBy = orderData.header?.createdBy;
+      const currentProveedor = latestHeader.reDestinatarios;
+      if (currentProveedor && previewGlobalId) {
+        const ordersToGroupQuery = query(
+          ordersCollectionRef,
+          where("header.status", "==", "draft"),
+          where("header.reDestinatarios", "==", currentProveedor)
+        );
+        const ordersToGroupSnapshot = await getDocs(ordersToGroupQuery);
+        const batch = writeBatch(db);
+        let mutationCount = 0;
 
-        if (docCreatedBy !== userId) return;
+        ordersToGroupSnapshot.docs.forEach((docSnapshot) => {
+          const orderData = docSnapshot.data();
+          const existingMailId = orderData.header?.mailId;
+          const docCreatedBy = orderData.header?.createdBy;
 
-        if (!existingMailId || existingMailId !== previewGlobalId) {
-          const orderRef = doc(
-            db,
-            `artifacts/${appId}/public/data/pedidos`,
-            docSnapshot.id
-          );
-          batch.update(orderRef, { "header.mailId": previewGlobalId });
-          mutationCount++;
+          if (docCreatedBy !== userId) return;
+
+          if (!existingMailId || existingMailId !== previewGlobalId) {
+            const orderRef = doc(
+              db,
+              `artifacts/${appId}/public/data/pedidos`,
+              docSnapshot.id
+            );
+            batch.update(orderRef, { "header.mailId": previewGlobalId });
+            mutationCount++;
+          }
+        });
+
+        if (mutationCount > 0) {
+          await batch.commit();
         }
-      });
-
-      if (mutationCount > 0) {
-        await batch.commit();
       }
-    }
 
-    const q = query(
-      ordersCollectionRef,
-      where("header.mailId", "==", previewGlobalId)
-    );
-    const querySnapshot = await getDocs(q);
+      const q = query(
+        ordersCollectionRef,
+        where("header.mailId", "==", previewGlobalId)
+      );
+      const querySnapshot = await getDocs(q);
 
-    let ordersForPreview = querySnapshot.docs.map((doc) => ({
-      id: doc.id,
-      header: doc.data().header,
-      items: JSON.parse(doc.data().items || "[]"),
-    }));
+      ordersForPreview = querySnapshot.docs.map((doc) => ({
+        id: doc.id,
+        header: doc.data().header,
+        items: JSON.parse(doc.data().items || "[]"),
+      }));
 
-    ordersForPreview = ordersForPreview.filter(
-      (order) => order.header?.status !== "deleted"
-    );
+      ordersForPreview = ordersForPreview.filter(
+        (order) => order.header?.status !== "deleted"
+      );
 
-    const activeOrderCurrentState = {
-      id: activeOrderId,
-      header: { ...latestHeader },
-      items: latestItems.map((item) => ({ ...item })),
-    };
+      const activeOrderCurrentState = {
+        id: activeOrderId,
+        header: { ...latestHeader },
+        items: latestItems.map((item) => ({ ...item })),
+      };
 
-    const existingIndex = ordersForPreview.findIndex(
-      (o) => o.id === activeOrderId
-    );
-    if (existingIndex !== -1) {
-      if (activeOrderCurrentState.header?.status !== "deleted") {
-        ordersForPreview[existingIndex] = activeOrderCurrentState;
-      } else {
-        ordersForPreview.splice(existingIndex, 1);
+      const existingIndex = ordersForPreview.findIndex(
+        (o) => o.id === activeOrderId
+      );
+      if (existingIndex !== -1) {
+        if (activeOrderCurrentState.header?.status !== "deleted") {
+          ordersForPreview[existingIndex] = activeOrderCurrentState;
+        } else {
+          ordersForPreview.splice(existingIndex, 1);
+        }
+      } else if (
+        activeOrderCurrentState.id &&
+        activeOrderCurrentState.header?.mailId === previewGlobalId &&
+        activeOrderCurrentState.header?.status !== "deleted"
+      ) {
+        ordersForPreview.push(activeOrderCurrentState);
       }
-    } else if (
-      activeOrderCurrentState.id &&
-      activeOrderCurrentState.header?.mailId === previewGlobalId &&
-      activeOrderCurrentState.header?.status !== "deleted"
-    ) {
-      ordersForPreview.push(activeOrderCurrentState);
     }
 
     ordersForPreview.sort((a, b) => {
@@ -3601,7 +3636,7 @@ const App = () => {
         whiteSpace: "nowrap",
         zIndex: 10,
       }}>
-        v48.1 · 11 Mar 2026
+        v48.2 · 11 Mar 2026
       </div>
     </div>
   );

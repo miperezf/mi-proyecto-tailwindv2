@@ -450,7 +450,7 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Detalle de Pedido</title>
 </head>
-<body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:16px 16px 16px 32px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
   <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${mailId}</div>
   <div>
     ${innerEmailContentHtml}
@@ -1113,11 +1113,10 @@ const App = () => {
     explicitItems = null
   ) => {
     if (!db || !userId || !activeOrderIdRef.current) return;
-    // Never auto-save a sent order — only drafts should be written by autosave/flush
-    const activeOrderStatus = displayedOrders.find(
-      (o) => o.id === activeOrderIdRef.current
-    )?.header?.status;
-    if (activeOrderStatus === "sent") return;
+    // Guard: don't save if user hasn't actually edited anything since the order was loaded.
+    // This prevents the initial searchByMailId load from immediately writing back to Firestore.
+    // Once isUserEditing is true (user typed something), saves are always allowed.
+    if (!isUserEditing.current) return;
 
     // Always read from refs — never from closures
     const snapshotHeader = explicitHeader ?? headerInfoRef.current;
@@ -1164,8 +1163,13 @@ const App = () => {
       clearTimeout(pendingSaveTimeout.current);
       pendingSaveTimeout.current = null;
     }
-    isUserEditing.current = false;
+    // ── IMPORTANT: set isUserEditing=true so saveCurrentFormDataToDisplayed
+    // doesn't skip the save (guard requires isUserEditing to be true).
+    // flushAndSave is ONLY called from explicit user actions (navigate/send/preview)
+    // so it is always correct to force-save here regardless of editing state.
+    isUserEditing.current = true;
     await saveCurrentFormDataToDisplayed();
+    isUserEditing.current = false;
   };
 
   const handleHeaderChange = (e) => {
@@ -2042,7 +2046,7 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Detalle de Pedido</title>
 </head>
-<body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:16px 16px 16px 32px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
   <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${mailGlobalId}</div>
   <div>
     ${innerEmailContentHtml}
@@ -2206,7 +2210,7 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Previsualización de Pedido</title>
 </head>
-<body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:16px 16px 16px 32px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
   <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${previewGlobalId}</div>
   <div>
     ${innerPreviewHtml}
@@ -3579,7 +3583,7 @@ const App = () => {
         whiteSpace: "nowrap",
         zIndex: 10,
       }}>
-        v47.0 · 08 Mar 2026
+        v48.0 · 11 Mar 2026
       </div>
     </div>
   );

@@ -1866,6 +1866,11 @@ const App = () => {
         return;
       }
 
+      // ── Capture displayedOrders synchronously BEFORE any await.
+      // React state reads inside async functions after an await may return
+      // stale values — this snapshot is always current.
+      const displayedOrdersSnapshot = displayedOrders;
+
       // Flush any pending blur state then persist to Firestore before acting
       await flushAndSave();
 
@@ -1888,9 +1893,12 @@ const App = () => {
       let ordersToProcess;
 
       if (committedSearchTermRef.current) {
-        // ── SENT MODE: use displayedOrders directly — they already have all local edits.
-        // Querying Firestore here would return stale values for unsaved changes.
-        ordersToProcess = displayedOrders
+        // ── SENT MODE: build ordersToProcess from the ref snapshot taken at the
+        // top of this function (latestHeader / latestItems) plus displayedOrdersSnapshot.
+        // We captured displayedOrdersSnapshot synchronously before any await so it
+        // is never stale — React state reads inside async functions after an await
+        // can return outdated values.
+        ordersToProcess = displayedOrdersSnapshot
           .filter((o) => o.header?.status !== "deleted")
           .map((o) => o.id === activeOrderIdRef.current
             ? { ...o, header: { ...latestHeader }, items: latestItems.map(i => ({ ...i })) }
@@ -2012,20 +2020,18 @@ const App = () => {
             };
           }
         } else if (order.header?.status === "sent") {
-          // ── SENT MODE FIX: persist local edits (e.g. price changes) back to
-          // Firestore. displayedOrders already has the updated items — write them
-          // now so the next search returns the correct values.
-          const localOrder = displayedOrders.find((o) => o.id === order.id);
-          if (localOrder) {
-            const updatedItems = isActiveOrder
-              ? latestItems
-              : localOrder.items;
-            await updateDoc(orderDocRef, {
-              items: JSON.stringify(updatedItems),
-              "header.lastModifiedBy": userId,
-              "header.updatedAt": Date.now(),
-            });
-          }
+          // ── SENT MODE FIX: persist local edits back to Firestore so the next
+          // search returns the correct values.
+          // CRITICAL: do NOT use displayedOrders (React state, may be stale).
+          // For the active order use latestItems from refs (always current).
+          // For other orders use order.items which was already merged from
+          // displayedOrders into ordersToProcess above.
+          const updatedItems = isActiveOrder ? latestItems : order.items;
+          await updateDoc(orderDocRef, {
+            items: JSON.stringify(updatedItems),
+            "header.lastModifiedBy": userId,
+            "header.updatedAt": Date.now(),
+          });
         }
       }
 
@@ -2110,6 +2116,9 @@ const App = () => {
   };
 
   const handlePreviewOrder = async () => {
+    // Capture displayedOrders synchronously before any await
+    const displayedOrdersSnapshot = displayedOrders;
+
     // Force blur so pending onBlur formatters run before reading refs
     if (document.activeElement && document.activeElement !== document.body) {
       document.activeElement.blur();
@@ -2137,9 +2146,8 @@ const App = () => {
     let ordersForPreview;
 
     if (committedSearchTermRef.current) {
-      // ── SENT MODE: use displayedOrders directly — they already have all local edits.
-      // Do NOT query Firestore here (it would return stale values for unsaved changes).
-      ordersForPreview = displayedOrders
+      // ── SENT MODE: use displayedOrdersSnapshot (captured before awaits) — never stale.
+      ordersForPreview = displayedOrdersSnapshot
         .filter((o) => o.header?.status !== "deleted")
         .map((o) => o.id === activeOrderIdRef.current
           ? { ...o, header: { ...latestHeader }, items: latestItems.map(i => ({ ...i })) }
@@ -3648,7 +3656,7 @@ const App = () => {
         whiteSpace: "nowrap",
         zIndex: 10,
       }}>
-        v48.3 · 11 Mar 2026
+        v48.4 · 11 Mar 2026
       </div>
     </div>
   );

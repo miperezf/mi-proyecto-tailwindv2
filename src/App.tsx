@@ -1114,20 +1114,11 @@ const App = () => {
   ) => {
     if (!db || !userId || !activeOrderIdRef.current) return;
     // Guard: don't save if user hasn't actually edited anything since the order was loaded.
-    // This prevents the initial searchByMailId load from immediately writing back to Firestore.
-    // Once isUserEditing is true (user typed something), saves are always allowed.
     if (!isUserEditing.current) return;
 
     // Always read from refs — never from closures
     const snapshotHeader = explicitHeader ?? headerInfoRef.current;
     const snapshotItems  = explicitItems  ?? orderItemsRef.current;
-
-    // ── v23 FIX (collaborative model): The previous `isOwnOrder` check was
-    // blocking writes for documents created by other users, making the
-    // collaborative editing model non-functional. Any authenticated user who
-    // searches a mailID must be able to save edits to all its pedidos.
-    // The fields `createdBy` and `createdAt` remain protected via `skipFields`
-    // in saveOrderToFirestore — they can never be overwritten.
 
     const currentOrderData = {
       id: activeOrderIdRef.current,
@@ -1135,9 +1126,19 @@ const App = () => {
       items: snapshotItems.map((item) => ({ ...item })),
     };
 
+    // Always update local displayedOrders — preview and navigation rely on this
     setDisplayedOrders((prev) =>
       prev.map((o) => (o.id === activeOrderIdRef.current ? { ...o, ...currentOrderData } : o))
     );
+
+    // ── SENT MODE GUARD: if we are viewing a searched mailID (committedSearchTermRef set)
+    // AND the active order is sent, do NOT write to Firestore.
+    // Changes are kept in local state only — Firestore is only updated by performSendEmail.
+    const activeOrderStatus = displayedOrders.find(
+      (o) => o.id === activeOrderIdRef.current
+    )?.header?.status;
+    const isViewingSearchedMail = !!committedSearchTermRef.current;
+    if (isViewingSearchedMail && activeOrderStatus === "sent") return;
 
     await saveOrderToFirestore(currentOrderData);
   };
@@ -2223,10 +2224,27 @@ const App = () => {
   };
 
   const handleFinalizeOrder = async () => {
-    // ── v20 FIX: handleFinalizeOrder was missing a ref-flush in v19.
-    // If the user edited a field and immediately clicked "Finalizar",
-    // the blur debounce may not have fired yet.
-    await flushAndSave();
+    // Force blur so any pending onBlur formatters run before reading refs
+    if (document.activeElement && document.activeElement !== document.body) {
+      document.activeElement.blur();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    if (pendingSaveTimeout.current) {
+      clearTimeout(pendingSaveTimeout.current);
+      pendingSaveTimeout.current = null;
+    }
+    // Update local state only — do NOT write to Firestore here.
+    // Firestore is only updated by performSendEmail.
+    const snapshotHeader = headerInfoRef.current;
+    const snapshotItems  = orderItemsRef.current;
+    if (activeOrderIdRef.current) {
+      setDisplayedOrders((prev) =>
+        prev.map((o) => o.id === activeOrderIdRef.current
+          ? { ...o, header: { ...snapshotHeader }, items: snapshotItems.map(i => ({ ...i })) }
+          : o
+        )
+      );
+    }
 
     // Read mailId from ref (not stale closure)
     let mailIdToAssign = headerInfoRef.current.mailId;
@@ -3583,7 +3601,7 @@ const App = () => {
         whiteSpace: "nowrap",
         zIndex: 10,
       }}>
-        v48.0 · 11 Mar 2026
+        v48.1 · 11 Mar 2026
       </div>
     </div>
   );

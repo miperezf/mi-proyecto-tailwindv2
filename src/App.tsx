@@ -183,7 +183,7 @@ const App = () => {
   // ─── HISTORY PANEL ──────────────────────────────────────────────────────────
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [showWhatsNew, setShowWhatsNew] = useState(() => {
-    return localStorage.getItem("frutam_whatsnew_v47") !== "seen";
+    return localStorage.getItem("frutam_whatsnew_v50") !== "seen";
   });
   const [historyResendingId, setHistoryResendingId] = useState(null);
 
@@ -1051,6 +1051,14 @@ const App = () => {
         setHeaderInfo(last.header);
         setOrderItems(last.items);
         setCurrentOrderIndex(orders.length - 1);
+
+        console.log("[FRUTAM:SEARCH] ✅ Pedido cargado por Mail ID:", {
+          mailId,
+          totalPedidos: orders.length,
+          status:  last.header?.status,
+          exporta: last.header?.exporta,
+          nave:    last.header?.nave,
+        });
       }
     } catch (err) {
     } finally {
@@ -1108,7 +1116,6 @@ const App = () => {
     explicitItems = null
   ) => {
     if (!db || !userId || !activeOrderIdRef.current) return;
-    // Guard: don't save if user hasn't actually edited anything since the order was loaded.
     if (!isUserEditing.current) return;
 
     // Always read from refs — never from closures
@@ -1126,14 +1133,19 @@ const App = () => {
       prev.map((o) => (o.id === activeOrderIdRef.current ? { ...o, ...currentOrderData } : o))
     );
 
-    // ── SENT MODE GUARD
+    // ── SENT MODE GUARD: mientras el usuario navega/visualiza un pedido sent
+    // recuperado por Mail ID, el autosave por blur NO escribe el header a
+    // Firestore en caliente — evita pisar datos con valores parciales.
     const activeOrderStatus = displayedOrders.find(
       (o) => o.id === activeOrderIdRef.current
     )?.header?.status;
     const isViewingSearchedMail = !!committedSearchTermRef.current;
+
     if (isViewingSearchedMail && activeOrderStatus === "sent") {
+      console.log("[FRUTAM:SAVE] 🛡️ SENT MODE GUARD — autosave bloqueado (ok, se usará headerInfo en el envío)");
       return;
     }
+
     await saveOrderToFirestore(currentOrderData);
   };
 
@@ -1860,17 +1872,33 @@ const App = () => {
         return;
       }
 
-      // ── Capture displayedOrders synchronously BEFORE any await.
+      // ── Capture displayedOrders y headerInfo synchronously BEFORE any await.
       // React state reads inside async functions after an await may return
       // stale values — this snapshot is always current.
+      // IMPORTANTE: headerInfo se captura del estado React (no del ref) porque
+      // cuando el pedido es "sent", el SENT MODE GUARD bloquea la escritura del
+      // header en flushAndSave — el ref queda desactualizado pero el estado React
+      // siempre tiene los valores que el usuario editó en pantalla.
       const displayedOrdersSnapshot = displayedOrders;
+      const headerInfoSnapshot = { ...headerInfo };
 
       // Flush any pending blur state then persist to Firestore before acting
       await flushAndSave();
 
-      // Read the authoritative state from refs (always current after flush)
-      const latestHeader = headerInfoRef.current;
+      // Para items usamos el ref (siempre actualizado — el guard no lo bloquea).
+      // Para el header usamos el snapshot del estado React capturado antes del
+      // primer await, que refleja exactamente lo que el usuario tiene en pantalla.
+      const latestHeader = headerInfoSnapshot;
       const latestItems  = orderItemsRef.current;
+
+      console.log("[FRUTAM:SEND] 📋 Header capturado para envío:", {
+        exporta:       latestHeader.exporta,
+        nave:          latestHeader.nave,
+        deNombrePais:  latestHeader.deNombrePais,
+        status:        latestHeader.status,
+        mailId:        latestHeader.mailId,
+        fuente: "headerInfo (estado React) — no ref, para capturar cambios bloqueados por SENT MODE GUARD",
+      });
 
       const mailGlobalId = latestHeader.mailId;
 
@@ -2008,15 +2036,39 @@ const App = () => {
           }
         } else if (order.header?.status === "sent") {
           // SENT: cualquier usuario puede persistir ediciones — no hay cambio de
-          // ownership, solo se actualizan items. El guard de createdBy NO aplica
-          // aquí porque el pedido ya fue enviado y cualquier usuario del equipo
-          // puede corregir precios y re-enviar.
+          // ownership. El guard de createdBy NO aplica aquí porque el pedido ya
+          // fue enviado y cualquier usuario del equipo puede corregir y re-enviar.
           const updatedItems = isActiveOrder ? latestItems : order.items;
-          await updateDoc(orderDocRef, {
+
+          // ── FIX: cuando es el pedido activo, persistir también los campos del
+          // header que el usuario modificó. El SENT MODE GUARD bloqueó el autosave
+          // por blur, por lo que headerInfoRef quedó desactualizado — usamos
+          // latestHeader (capturado del estado React antes del primer await).
+          const updatePayload: Record<string, any> = {
             items: JSON.stringify(updatedItems),
             "header.lastModifiedBy": userId,
             "header.updatedAt": Date.now(),
-          });
+          };
+
+          if (isActiveOrder) {
+            const skipFields = new Set(["createdBy", "createdAt", "status"]);
+            Object.entries(latestHeader).forEach(([key, value]) => {
+              if (!skipFields.has(key)) {
+                updatePayload[`header.${key}`] = value;
+              }
+            });
+
+            console.log("[FRUTAM:SEND] ✅ Orden SENT (activa) — persistiendo header + items:", {
+              exporta:      latestHeader.exporta,
+              nave:         latestHeader.nave,
+              deNombrePais: latestHeader.deNombrePais,
+              incoterm:     latestHeader.incoterm,
+            });
+          } else {
+            console.log("[FRUTAM:SEND] ✅ Orden SENT (no activa) — persistiendo solo items");
+          }
+
+          await updateDoc(orderDocRef, updatePayload);
         }
       }
 
@@ -2101,8 +2153,11 @@ const App = () => {
   };
 
   const handlePreviewOrder = async () => {
-    // Capture displayedOrders synchronously before any await
+    // Capture displayedOrders y headerInfo synchronously before any await.
+    // headerInfo se captura del estado React (no del ref) por el mismo motivo
+    // que en performSendEmail: el SENT MODE GUARD puede dejar el ref desactualizado.
     const displayedOrdersSnapshot = displayedOrders;
+    const headerInfoSnapshot = { ...headerInfo };
 
     // Force blur so pending onBlur formatters run before reading refs
     if (document.activeElement && document.activeElement !== document.body) {
@@ -2114,9 +2169,10 @@ const App = () => {
       pendingSaveTimeout.current = null;
     }
 
-    // Read from refs after flush
+    // Para items usamos el ref (siempre actualizado).
+    // Para el header usamos el snapshot del estado React.
     const latestItems  = orderItemsRef.current;
-    const latestHeader = headerInfoRef.current;
+    const latestHeader = headerInfoSnapshot;
 
     const previewGlobalId = latestHeader.mailId;
 
@@ -3503,16 +3559,13 @@ const App = () => {
               <span style={{ fontSize: "28px" }}>🚀</span>
               <div>
                 <h2 className="text-base font-bold text-gray-800">Novedades de esta versión</h2>
-                <p className="text-xs text-gray-400">Frutam · v47</p>
+                <p className="text-xs text-gray-400">Frutam · v50</p>
               </div>
             </div>
             <ul className="space-y-3 mb-6">
               {[
-                { icon: "💡", title: "Precarga de datos", desc: "Al escribir un proveedor la app sugiere automáticamente los datos del último pedido enviado, incluyendo tabla completa, pallets y precios." },
-                { icon: "🌙", title: "Modo oscuro", desc: "Activable desde el panel de configuración." },
-                { icon: "📄", title: "Nuevo Mail", desc: "Ícono en la esquina superior derecha para descartar los drafts actuales y comenzar un mail nuevo." },
-                { icon: "🔢", title: "Pallets sin negativos", desc: "El campo de pallets no acepta valores negativos." },
-                { icon: "✉️", title: "Mejoras en el HTML del mail", desc: "Render del correo mejorado visualmente para una presentación más prolija." },
+                { icon: "🐛", title: "Corrección al editar pedidos enviados", desc: "Al recuperar un pedido por Mail ID y modificar datos como Exporta, Nave o País, los cambios ahora se guardan correctamente al re-enviar." },
+                { icon: "🛡️", title: "Sin escrituras en caliente", desc: "Los cambios en pedidos ya enviados siguen sin escribirse a la base de datos mientras editás — solo se guardan al confirmar el envío." },
               ].map(({ icon, title, desc }) => (
                 <li key={title} className="flex gap-3 items-start">
                   <span className="text-lg mt-0.5">{icon}</span>
@@ -3525,7 +3578,7 @@ const App = () => {
             </ul>
             <button
               onClick={() => {
-                localStorage.setItem("frutam_whatsnew_v47", "seen");
+                localStorage.setItem("frutam_whatsnew_v50", "seen");
                 setShowWhatsNew(false);
               }}
               className="w-full py-2.5 rounded-xl text-sm font-bold text-white transition-colors hover:opacity-90"
@@ -3641,7 +3694,7 @@ const App = () => {
         whiteSpace: "nowrap",
         zIndex: 10,
       }}>
-        v48.5 · 11 Mar 2026
+        v50 · 02 Jun 2026
       </div>
     </div>
   );

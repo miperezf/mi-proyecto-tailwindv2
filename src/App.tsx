@@ -3647,28 +3647,34 @@ const App = () => {
           <div className="rounded-2xl shadow-2xl w-full max-w-sm p-6" style={{ background: "#ffffff" }}>
             <div className="flex items-center gap-3 mb-4">
               <span style={{ fontSize: "28px" }}>🚀</span>
-              <div>
-                <h2 className="text-base font-bold text-gray-800">Novedades de esta versión</h2>
-                <p className="text-xs text-gray-400">Frutam · v50</p>
-              </div>
-            </div>
-            <ul className="space-y-3 mb-6">
-              {[
-                { icon: "🐛", title: "Corrección al editar pedidos enviados", desc: "Al recuperar un pedido por Mail ID y modificar datos como Exporta, Nave o País, los cambios ahora se guardan correctamente al re-enviar." },
-                { icon: "🛡️", title: "Sin escrituras en caliente", desc: "Los cambios en pedidos ya enviados siguen sin escribirse a la base de datos mientras editás — solo se guardan al confirmar el envío." },
-              ].map(({ icon, title, desc }) => (
-                <li key={title} className="flex gap-3 items-start">
-                  <span className="text-lg mt-0.5">{icon}</span>
-                  <div>
-                    <p className="text-sm font-semibold text-gray-700">{title}</p>
-                    <p className="text-xs text-gray-500 leading-snug">{desc}</p>
-                  </div>
-                </li>
-              ))}
-            </ul>
+             <div>
+  <h2 className="text-base font-bold text-gray-800">
+    Novedades de esta versión
+  </h2>
+  <p className="text-xs text-gray-400">Frutam · v51</p>
+</div>
+</div>
+
+<ul className="space-y-3 mb-6">
+  {[
+    {
+      icon: "🔄",
+      title: "Cambio global de FOB / FOT",
+      desc: "Ahora puedes cambiar entre FOB y FOT con un solo clic y aplicar el cambio a todos los pedidos de la operación, sin necesidad de modificarlos uno por uno.",
+    },
+  ].map(({ icon, title, desc }) => (
+    <li key={title} className="flex gap-3 items-start">
+      <span className="text-lg mt-0.5">{icon}</span>
+      <div>
+        <p className="text-sm font-semibold text-gray-700">{title}</p>
+        <p className="text-xs text-gray-500 leading-snug">{desc}</p>
+      </div>
+    </li>
+  ))}
+</ul>
             <button
               onClick={() => {
-                localStorage.setItem("frutam_whatsnew_v50", "seen");
+                localStorage.setItem("frutam_whatsnew_v51", "seen");
                 setShowWhatsNew(false);
               }}
               className="w-full py-2.5 rounded-xl text-sm font-bold text-white transition-colors hover:opacity-90"
@@ -3784,7 +3790,7 @@ const App = () => {
         whiteSpace: "nowrap",
         zIndex: 10,
       }}>
-        v50 · 02 Jun 2026
+        v51 · 19 Oct 2026
       </div>
     </div>
   );

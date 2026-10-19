@@ -1670,19 +1670,23 @@ const App = () => {
     const newOrderId = newOrderDocRef.id;
 
     const newBlankHeader = {
-      ...initialHeaderState,
-      reDestinatarios: currentHeader.reDestinatarios,
-      emailSubject: generateEmailSubjectValue(
-        [currentHeader.reDestinatarios],
-        [],
-        mailIdToAssignForNewOrder
-      ),
-      mailId: mailIdToAssignForNewOrder,
-      status: "draft",
-      createdAt: Date.now(),
-      createdBy: userId,
-      updatedAt: Date.now(),
-    };
+  ...initialHeaderState,
+  reDestinatarios: currentHeader.reDestinatarios,
+  // Hereda el Incoterm del pedido activo; si no es válido, usa el valor por defecto (FOB)
+  incoterm: ["FOB", "FOT"].includes(currentHeader.incoterm)
+    ? currentHeader.incoterm
+    : initialHeaderState.incoterm,
+  emailSubject: generateEmailSubjectValue(
+    [currentHeader.reDestinatarios],
+    [],
+    mailIdToAssignForNewOrder
+  ),
+  mailId: mailIdToAssignForNewOrder,
+  status: "draft",
+  createdAt: Date.now(),
+  createdBy: userId,
+  updatedAt: Date.now(),
+};
     const newBlankItems = [{ ...initialItemState, id: crypto.randomUUID() }];
 
     await saveOrderToFirestore({

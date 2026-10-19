@@ -178,6 +178,10 @@ const App = () => {
   const [pendingSearchTerm, setPendingSearchTerm] = useState("");
   const presenceUnsubscribeRef = useRef(null);
 
+  // ─── FOB/FOT GLOBAL: cola de escrituras y secuencia de selección ─────────────
+  const incotermWriteQueueRef = useRef(Promise.resolve());
+  const incotermSeqRef = useRef(0);
+
   // ─── LAST SEND RECOVERY ─────────────────────────────────────────────────────
 
   // ─── HISTORY PANEL ──────────────────────────────────────────────────────────
@@ -1207,6 +1211,72 @@ const App = () => {
     }
   };
 
+  // ── FOB/FOT GLOBAL: aplica el Incoterm a TODOS los pedidos de la operación
+  // (displayedOrders = pedidos de la operación activa, sin eliminados).
+  const handleIncotermChange = async (term) => {
+    if (!["FOB", "FOT"].includes(term)) return;
+
+    const prevTerm = headerInfoRef.current.incoterm || "FOB";
+    const prevDisplayed = displayedOrders;               // snapshot para revertir
+    const activeId = activeOrderIdRef.current;
+    const mySeq = ++incotermSeqRef.current;
+
+    // 1) UI + ref síncronos (el autosave/flush leen el ref y no pisan el valor nuevo)
+    headerInfoRef.current = { ...headerInfoRef.current, incoterm: term };
+    setHeaderInfo((prev) => ({ ...prev, incoterm: term }));
+    setDisplayedOrders((prev) =>
+      prev.map((o) =>
+        o.header?.status === "deleted"
+          ? o
+          : { ...o, header: { ...o.header, incoterm: term } }
+      )
+    );
+
+    if (!db || !userId) return;
+
+    // 2) Persistencia. Los "sent" no se escriben en caliente (SENT MODE GUARD):
+    //    se persisten al enviar (ver performSendEmail). Solo se escriben los borradores.
+    const draftIds = prevDisplayed
+      .filter((o) => o.id && o.header?.status === "draft")
+      .map((o) => o.id);
+    if (draftIds.length === 0) return;
+
+    // Cola: las escrituras salen en orden y la última selección es la que queda.
+    const run = incotermWriteQueueRef.current.then(async () => {
+      const batch = writeBatch(db);
+      draftIds.forEach((id) => {
+        batch.update(
+          doc(db, `artifacts/${appId}/public/data/pedidos`, id),
+          { "header.incoterm": term }          // únicamente este campo
+        );
+      });
+      await batch.commit();                      // atómico: todo o nada
+    });
+    incotermWriteQueueRef.current = run.catch(() => {});
+
+    try {
+      await run;
+    } catch (error) {
+      console.error("[FRUTAM:INCOTERM] Error al guardar", error);
+      // Solo revierte si no hubo una selección más reciente
+      if (mySeq === incotermSeqRef.current && isMountedRef.current) {
+        const prevById = Object.fromEntries(
+          prevDisplayed.map((o) => [o.id, o.id === activeId ? prevTerm : (o.header?.incoterm || "FOB")])
+        );
+        headerInfoRef.current = { ...headerInfoRef.current, incoterm: prevTerm };
+        setHeaderInfo((prev) => ({ ...prev, incoterm: prevTerm }));
+        setDisplayedOrders((prev) =>
+          prev.map((o) =>
+            prevById[o.id] !== undefined
+              ? { ...o, header: { ...o.header, incoterm: prevById[o.id] } }
+              : o
+          )
+        );
+        window.alert("No se pudo actualizar el Incoterm en todos los pedidos. Se restauró el valor anterior; intenta de nuevo.");
+      }
+    }
+  };
+
   // ── v20 ARCHITECTURE: The v19 fix introduced pendingItemsRef/pendingHeaderRef
   // as a two-step intermediate. This added complexity without full coverage
   // (headerInfo still had a stale closure risk in v19).
@@ -1670,23 +1740,23 @@ const App = () => {
     const newOrderId = newOrderDocRef.id;
 
     const newBlankHeader = {
-  ...initialHeaderState,
-  reDestinatarios: currentHeader.reDestinatarios,
-  // Hereda el Incoterm del pedido activo; si no es válido, usa el valor por defecto (FOB)
-  incoterm: ["FOB", "FOT"].includes(currentHeader.incoterm)
-    ? currentHeader.incoterm
-    : initialHeaderState.incoterm,
-  emailSubject: generateEmailSubjectValue(
-    [currentHeader.reDestinatarios],
-    [],
-    mailIdToAssignForNewOrder
-  ),
-  mailId: mailIdToAssignForNewOrder,
-  status: "draft",
-  createdAt: Date.now(),
-  createdBy: userId,
-  updatedAt: Date.now(),
-};
+      ...initialHeaderState,
+      reDestinatarios: currentHeader.reDestinatarios,
+      // Hereda el Incoterm global vigente (pedido activo); si no es válido, usa FOB
+      incoterm: ["FOB", "FOT"].includes(currentHeader.incoterm)
+        ? currentHeader.incoterm
+        : initialHeaderState.incoterm,
+      emailSubject: generateEmailSubjectValue(
+        [currentHeader.reDestinatarios],
+        [],
+        mailIdToAssignForNewOrder
+      ),
+      mailId: mailIdToAssignForNewOrder,
+      status: "draft",
+      createdAt: Date.now(),
+      createdBy: userId,
+      updatedAt: Date.now(),
+    };
     const newBlankItems = [{ ...initialItemState, id: crypto.randomUUID() }];
 
     await saveOrderToFirestore({
@@ -2008,6 +2078,14 @@ const App = () => {
         const dateB = b.header?.createdAt || 0;
         return dateA - dateB;
       });
+
+      // ── FOB/FOT GLOBAL: el Incoterm del pedido activo rige para todos los
+      // pedidos de la operación (correo y datos persistidos).
+      ordersToProcess = ordersToProcess.map((o) => ({
+        ...o,
+        header: { ...o.header, incoterm: latestHeader.incoterm || "FOB" },
+      }));
+
       for (const order of ordersToProcess) {
         const orderDocRef = doc(
           db,
@@ -2024,6 +2102,7 @@ const App = () => {
           const updatePayload = {
             "header.mailId": mailGlobalId,
             "header.status": "sent",
+            "header.incoterm": latestHeader.incoterm || "FOB",
             "header.lastModifiedBy": userId,
             "header.updatedAt": Date.now(),
           };
@@ -2050,6 +2129,7 @@ const App = () => {
           // latestHeader (capturado del estado React antes del primer await).
           const updatePayload: Record<string, any> = {
             items: JSON.stringify(updatedItems),
+            "header.incoterm": latestHeader.incoterm || "FOB",
             "header.lastModifiedBy": userId,
             "header.updatedAt": Date.now(),
           };
@@ -2284,6 +2364,12 @@ const App = () => {
       const dateB = b.header?.createdAt || 0;
       return dateA - dateB;
     });
+
+    // ── FOB/FOT GLOBAL: la previsualización usa el Incoterm del pedido activo
+    ordersForPreview = ordersForPreview.map((o) => ({
+      ...o,
+      header: { ...o.header, incoterm: latestHeader.incoterm || "FOB" },
+    }));
 
     if (ordersForPreview.length === 0) {
       setPreviewHtmlContent(
@@ -2794,7 +2880,7 @@ const App = () => {
                       type="button"
                       onClick={() => {
                         if (!currentOrderIsDeleted) {
-                          setHeaderInfo((prev) => ({ ...prev, incoterm: term }));
+                          handleIncotermChange(term);
                         }
                       }}
                       className={`px-2 py-0.5 text-xs font-medium transition-colors duration-100 focus:outline-none

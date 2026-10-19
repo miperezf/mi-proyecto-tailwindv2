@@ -40,6 +40,13 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
+// ── VERSIÓN DE LA APP ────────────────────────────────────────────────────────
+// Cambia SOLO APP_VERSION en cada release: el modal de novedades vuelve a
+// mostrarse una única vez por versión (lectura y escritura usan la misma clave).
+const APP_VERSION = "v51";
+const APP_VERSION_DATE = "19 Oct 2026";
+const WHATSNEW_KEY = `frutam_whatsnew_${APP_VERSION}`;
+
 const InputField = React.forwardRef(
   (
     {
@@ -186,10 +193,21 @@ const App = () => {
 
   // ─── HISTORY PANEL ──────────────────────────────────────────────────────────
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
+
+  // ── FIX: antes se leía "frutam_whatsnew_v50" pero se guardaba
+  // "frutam_whatsnew_v51", por lo que el modal aparecía siempre.
+  // Ahora ambas operaciones usan la misma constante WHATSNEW_KEY.
   const [showWhatsNew, setShowWhatsNew] = useState(() => {
-    return localStorage.getItem("frutam_whatsnew_v50") !== "seen";
+    try {
+      return localStorage.getItem(WHATSNEW_KEY) !== "seen";
+    } catch {
+      return false;
+    }
   });
   const [historyResendingId, setHistoryResendingId] = useState(null);
+
+  // ─── ACTUALIZACIÓN DE VERSIÓN ────────────────────────────────────────────────
+  const [updateAvailable, setUpdateAvailable] = useState(false);
 
   // ─── EMAIL CLIENT CONFIG ─────────────────────────────────────────────────────
   const EMAIL_CLIENT_KEY = "frutam_email_client";
@@ -652,6 +670,45 @@ const App = () => {
   useEffect(() => {
     isMountedRef.current = true;
     return () => { isMountedRef.current = false; };
+  }, []);
+
+  // ── DETECTOR DE NUEVAS VERSIONES ─────────────────────────────────────────────
+  // Compara el build id embebido en este bundle (__BUILD_ID__, inyectado por
+  // Vite) con /version.json del servidor. Si no coinciden:
+  //   • al cargar con un bundle viejo: recarga sola una vez (sin loops)
+  //   • con la app en uso: solo muestra un aviso, para no cortar un pedido
+  // Si __BUILD_ID__ no existe (p. ej. desarrollo), el efecto no hace nada.
+  useEffect(() => {
+    if (typeof __BUILD_ID__ === "undefined") return;
+    let first = true;
+
+    const check = async () => {
+      try {
+        const res = await fetch(`/version.json?t=${Date.now()}`, { cache: "no-store" });
+        if (!res.ok) { first = false; return; }
+        const { version } = await res.json();
+        if (version === __BUILD_ID__) { first = false; return; }
+
+        if (first && sessionStorage.getItem("frutam_reloaded") !== version) {
+          sessionStorage.setItem("frutam_reloaded", version);
+          window.location.reload();
+          return;
+        }
+        if (isMountedRef.current) setUpdateAvailable(true);
+      } catch {}
+      first = false;
+    };
+
+    check();
+    const id = setInterval(check, 5 * 60 * 1000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") check();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   const [showObservationModal, setShowObservationModal] = useState(false);
@@ -3647,34 +3704,34 @@ const App = () => {
           <div className="rounded-2xl shadow-2xl w-full max-w-sm p-6" style={{ background: "#ffffff" }}>
             <div className="flex items-center gap-3 mb-4">
               <span style={{ fontSize: "28px" }}>🚀</span>
-             <div>
-  <h2 className="text-base font-bold text-gray-800">
-    Novedades de esta versión
-  </h2>
-  <p className="text-xs text-gray-400">Frutam · v51</p>
-</div>
-</div>
+              <div>
+                <h2 className="text-base font-bold text-gray-800">
+                  Novedades de esta versión
+                </h2>
+                <p className="text-xs text-gray-400">Frutam · {APP_VERSION}</p>
+              </div>
+            </div>
 
-<ul className="space-y-3 mb-6">
-  {[
-    {
-      icon: "🔄",
-      title: "Cambio global de FOB / FOT",
-      desc: "Ahora puedes cambiar entre FOB y FOT con un solo clic y aplicar el cambio a todos los pedidos de la operación, sin necesidad de modificarlos uno por uno.",
-    },
-  ].map(({ icon, title, desc }) => (
-    <li key={title} className="flex gap-3 items-start">
-      <span className="text-lg mt-0.5">{icon}</span>
-      <div>
-        <p className="text-sm font-semibold text-gray-700">{title}</p>
-        <p className="text-xs text-gray-500 leading-snug">{desc}</p>
-      </div>
-    </li>
-  ))}
-</ul>
+            <ul className="space-y-3 mb-6">
+              {[
+                {
+                  icon: "🔄",
+                  title: "Cambio global de FOB / FOT",
+                  desc: "Ahora puedes cambiar entre FOB y FOT con un solo clic y aplicar el cambio a todos los pedidos de la operación, sin necesidad de modificarlos uno por uno.",
+                },
+              ].map(({ icon, title, desc }) => (
+                <li key={title} className="flex gap-3 items-start">
+                  <span className="text-lg mt-0.5">{icon}</span>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-700">{title}</p>
+                    <p className="text-xs text-gray-500 leading-snug">{desc}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
             <button
               onClick={() => {
-                localStorage.setItem("frutam_whatsnew_v51", "seen");
+                try { localStorage.setItem(WHATSNEW_KEY, "seen"); } catch {}
                 setShowWhatsNew(false);
               }}
               className="w-full py-2.5 rounded-xl text-sm font-bold text-white transition-colors hover:opacity-90"
@@ -3777,6 +3834,25 @@ const App = () => {
         </>,
         document.body
       )}
+
+      {/* ── AVISO DE NUEVA VERSIÓN ───────────────────────────────────────────── */}
+      {updateAvailable && (
+        <div style={{
+          position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)",
+          zIndex: 10000, background: "#2563eb", color: "#fff",
+          padding: "10px 16px", borderRadius: 10, boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
+          display: "flex", alignItems: "center", gap: 12, fontSize: 14,
+        }}>
+          <span>🚀 Hay una nueva versión disponible</span>
+          <button
+            onClick={async () => { await flushAndSave(); window.location.reload(); }}
+            style={{ background: "#fff", color: "#2563eb", fontWeight: 700, border: "none", borderRadius: 6, padding: "4px 12px", cursor: "pointer" }}
+          >
+            Actualizar
+          </button>
+        </div>
+      )}
+
       {/* ── VERSION FOOTER ───────────────────────────────────────────────────── */}
       <div style={{
         position: "fixed",
@@ -3790,7 +3866,7 @@ const App = () => {
         whiteSpace: "nowrap",
         zIndex: 10,
       }}>
-        v51 · 19 Oct 2026
+        {APP_VERSION} · {APP_VERSION_DATE}
       </div>
     </div>
   );

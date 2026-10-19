@@ -41,11 +41,15 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 // ── VERSIÓN DE LA APP ────────────────────────────────────────────────────────
-// Cambia SOLO APP_VERSION en cada release: el modal de novedades vuelve a
-// mostrarse una única vez por versión (lectura y escritura usan la misma clave).
-const APP_VERSION = "v51";
+// APP_VERSION es la versión que se muestra en el footer: súbela en cada release.
+// WHATSNEW_VERSION controla el modal de novedades de forma independiente: solo
+// cámbiala cuando actualices el contenido del modal (así no reaparece con un
+// texto antiguo en releases que son solo correcciones). Lectura y escritura
+// usan la misma clave (WHATSNEW_KEY).
+const APP_VERSION = "v51.2";
 const APP_VERSION_DATE = "19 Oct 2026";
-const WHATSNEW_KEY = `frutam_whatsnew_${APP_VERSION}`;
+const WHATSNEW_VERSION = "v51";
+const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
 
 const InputField = React.forwardRef(
   (
@@ -2304,6 +2308,21 @@ const App = () => {
       setShowOrderActionsModal(false);
       setSearchTerm("");
       setCommittedSearchTerm("");
+      // ── v51.2: el ref debe resetearse junto con el estado. Antes quedaba con el
+      // Mail ID buscado y el nuevo borrador heredaba el "modo búsqueda" (sin
+      // precarga por proveedor y con Preview/Send por la rama equivocada).
+      committedSearchTermRef.current = "";
+      // ── v51.2: liberar la presencia del Mail ID enviado (igual que handleClearSearch).
+      // clearPresence maneja sus propios errores; no se espera para no demorar la UI.
+      if (presenceMailId) {
+        clearPresence(presenceMailId);
+        if (presenceUnsubscribeRef.current) {
+          presenceUnsubscribeRef.current();
+          presenceUnsubscribeRef.current = null;
+        }
+        setPresenceMailId(null);
+        setOtherUsersPresent([]);
+      }
       setEmailActionTriggered(false);
       setIsShowingPreview(false);
       setPreviewHtmlContent("");

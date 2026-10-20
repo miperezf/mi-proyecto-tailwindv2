@@ -46,7 +46,14 @@ const db = getFirestore(app);
 // cámbiala cuando actualices el contenido del modal (así no reaparece con un
 // texto antiguo en releases que son solo correcciones). Lectura y escritura
 // usan la misma clave (WHATSNEW_KEY).
-const APP_VERSION = "v51.2";
+//
+// Historial de versiones (v51.x = correcciones sobre v51):
+//  v51.1 header de pedidos sent no activos se persiste al reenviar
+//  v51.2 reset de ref de búsqueda y presencia tras enviar
+//  v51.3 ref de País (navegación con flechas) y lista de variedades para MANZANA/MANZANAS
+//  v51.4 acciones de fila respetan el modo sent (no escriben header en caliente)
+//  v51.5 escape del Mail ID en el HTML del correo/preview y iframe del preview en sandbox
+const APP_VERSION = "v51.5";
 const APP_VERSION_DATE = "19 Oct 2026";
 const WHATSNEW_VERSION = "v51";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -169,6 +176,13 @@ const initialItemState = {
 // ── v51.1: campos de header que el usuario puede editar a mano.
 // Se usan para persistir ediciones en pedidos "sent" no activos al reenviar.
 // No incluye status/createdBy/createdAt/mailId/emailSubject a propósito.
+// ── v51.3: la lista de variedades de manzana debe ofrecerse tanto para
+// "MANZANA" (singular, el valor normalizado y el placeholder) como "MANZANAS".
+const isAppleSpecies = (especie) => {
+  const v = especie ? especie.toUpperCase() : "";
+  return v === "MANZANA" || v === "MANZANAS";
+};
+
 const EDITABLE_HEADER_FIELDS = [
   "reDestinatarios",
   "deNombrePais",
@@ -491,7 +505,7 @@ const App = () => {
   <title>Detalle de Pedido</title>
 </head>
 <body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
-  <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${mailId}</div>
+  <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${escapeHtml(mailId)}</div>
   <div>
     ${innerEmailContentHtml}
   </div>
@@ -781,6 +795,16 @@ const App = () => {
         `artifacts/${appId}/public/data/pedidos`
       );
       const { header, items } = orderToSave;
+      // ── v51.4: las acciones de fila (agregar/eliminar/reordenar/cancelar/observación)
+      // llaman aquí con rowAction. Sin pedido activo no hay nada que guardar (antes se
+      // generaba un id nuevo y updateDoc fallaba). Y si el pedido activo es un "sent"
+      // recuperado por Mail ID, solo se guardan los items: el header se persiste al
+      // enviar (SENT MODE GUARD), no en caliente con valores a medio editar.
+      if (orderToSave.rowAction && !orderToSave.id) return;
+      const itemsOnly =
+        !!orderToSave.rowAction &&
+        !!committedSearchTermRef.current &&
+        header?.status === "sent";
       const orderDocId = orderToSave.id || doc(ordersCollectionRef).id;
       const orderDocRef = doc(ordersCollectionRef, orderDocId);
 
@@ -796,11 +820,13 @@ const App = () => {
       } else {
         const updatePayload = { items: JSON.stringify(items) };
         const skipFields = new Set(["createdBy", "createdAt"]);
-        Object.entries(header).forEach(([key, value]) => {
-          if (!skipFields.has(key)) {
-            updatePayload[`header.${key}`] = value;
-          }
-        });
+        if (!itemsOnly) {
+          Object.entries(header).forEach(([key, value]) => {
+            if (!skipFields.has(key)) {
+              updatePayload[`header.${key}`] = value;
+            }
+          });
+        }
         updatePayload["header.lastModifiedBy"] = userId;
         updatePayload["header.updatedAt"] = Date.now();
         await updateDoc(orderDocRef, updatePayload);
@@ -1493,6 +1519,7 @@ const App = () => {
           id: activeOrderIdRef.current,
           header: { ...headerInfoRef.current },
           items: updatedItems,
+          rowAction: true, // v51.4
         });
       }, 0);
       return updatedItems;
@@ -1509,6 +1536,7 @@ const App = () => {
           id: activeOrderIdRef.current,
           header: { ...headerInfoRef.current },
           items: updatedItems,
+          rowAction: true, // v51.4
         });
       }, 0);
       return updatedItems;
@@ -1527,6 +1555,7 @@ const App = () => {
           id: activeOrderIdRef.current,
           header: { ...headerInfoRef.current },
           items: updated,
+          rowAction: true, // v51.4
         });
       }, 0);
       return updated;
@@ -1548,6 +1577,7 @@ const App = () => {
           id: activeOrderIdRef.current,
           header: { ...headerInfoRef.current },
           items: updatedItems,
+          rowAction: true, // v51.4
         });
       }, 0);
       return updatedItems;
@@ -2294,7 +2324,7 @@ const App = () => {
   <title>Detalle de Pedido</title>
 </head>
 <body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
-  <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${mailGlobalId}</div>
+  <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${escapeHtml(mailGlobalId)}</div>
   <div>
     ${innerEmailContentHtml}
   </div>
@@ -2506,7 +2536,7 @@ const App = () => {
   <title>Previsualización de Pedido</title>
 </head>
 <body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
-  <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${previewGlobalId}</div>
+  <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${escapeHtml(previewGlobalId)}</div>
   <div>
     ${innerPreviewHtml}
   </div>
@@ -2589,6 +2619,7 @@ const App = () => {
         id: activeOrderIdRef.current,
         header: { ...headerInfoRef.current },
         items: updatedItems,
+        rowAction: true, // v51.4
       });
     }
     setShowObservationModal(false);
@@ -3041,7 +3072,7 @@ const App = () => {
                 onFocus={handleFocusField}
                 onBlur={handleBlurField(handleHeaderBlur)}
                 placeholder="País de destino"
-                ref={(el) => (headerInputRefs.current.deDestinatarios = el)}
+                ref={(el) => (headerInputRefs.current.deNombrePais = el)} // v51.3: clave alineada con headerInputOrder
                 readOnly={currentOrderIsDeleted}
               />
             </div>
@@ -3217,7 +3248,7 @@ const App = () => {
                           placeholder="Manzana"
                           readOnly={item.isCanceled || currentOrderIsDeleted}
                           isCanceledProp={item.isCanceled || currentOrderIsDeleted}
-                          {...(item.especie && item.especie.toUpperCase() === "MANZANAS" ? { list: "apple-varieties" } : {})}
+                          {...(isAppleSpecies(item.especie) ? { list: "apple-varieties" } : {})}
                           ref={(el) => {
                             if (!tableInputRefs.current[item.id])
                               tableInputRefs.current[item.id] = {};
@@ -3235,7 +3266,7 @@ const App = () => {
                           placeholder="Galas"
                           readOnly={item.isCanceled || currentOrderIsDeleted}
                           isCanceledProp={item.isCanceled || currentOrderIsDeleted}
-                          {...(item.especie && item.especie.toUpperCase() === "MANZANAS" ? { list: "apple-varieties" } : {})}
+                          {...(isAppleSpecies(item.especie) ? { list: "apple-varieties" } : {})}
                           ref={(el) => {
                             if (!tableInputRefs.current[item.id])
                               tableInputRefs.current[item.id] = {};
@@ -3436,11 +3467,11 @@ const App = () => {
                   </div>
                   <div className="flex justify-between items-center text-sm">
                     <span className="font-semibold text-gray-500 w-1/2">Especie:</span>
-                    <TableInput name="especie" value={item.especie} onChange={(e) => handleItemChange(item.id, e)} onFocus={handleFocusField} onBlur={handleBlurField((e) => handleItemBlur(item.id, e))} placeholder="Manzana" readOnly={item.isCanceled || currentOrderIsDeleted} isCanceledProp={item.isCanceled || currentOrderIsDeleted} {...(item.especie && item.especie.toUpperCase() === "MANZANAS" ? { list: "apple-varieties" } : {})} />
+                    <TableInput name="especie" value={item.especie} onChange={(e) => handleItemChange(item.id, e)} onFocus={handleFocusField} onBlur={handleBlurField((e) => handleItemBlur(item.id, e))} placeholder="Manzana" readOnly={item.isCanceled || currentOrderIsDeleted} isCanceledProp={item.isCanceled || currentOrderIsDeleted} {...(isAppleSpecies(item.especie) ? { list: "apple-varieties" } : {})} />
                   </div>
                   <div className="flex justify-between items-center text-sm">
                     <span className="font-semibold text-gray-500 w-1/2">Variedad:</span>
-                    <TableInput name="variedad" value={item.variedad} onChange={(e) => handleItemChange(item.id, e)} onFocus={handleFocusField} onBlur={handleBlurField((e) => handleItemBlur(item.id, e))} placeholder="Galas" readOnly={item.isCanceled || currentOrderIsDeleted} isCanceledProp={item.isCanceled || currentOrderIsDeleted} {...(item.especie && item.especie.toUpperCase() === "MANZANAS" ? { list: "apple-varieties" } : {})} />
+                    <TableInput name="variedad" value={item.variedad} onChange={(e) => handleItemChange(item.id, e)} onFocus={handleFocusField} onBlur={handleBlurField((e) => handleItemBlur(item.id, e))} placeholder="Galas" readOnly={item.isCanceled || currentOrderIsDeleted} isCanceledProp={item.isCanceled || currentOrderIsDeleted} {...(isAppleSpecies(item.especie) ? { list: "apple-varieties" } : {})} />
                   </div>
                   <div className="flex justify-between items-center text-sm">
                     <span className="font-semibold text-gray-500 w-1/2">Formato:</span>
@@ -3554,6 +3585,7 @@ const App = () => {
                   <div className="bg-gray-50 rounded-md border border-gray-200 flex-grow overflow-hidden" style={{minHeight: "300px"}}>
                     <iframe
                       srcDoc={previewHtmlContent}
+                      sandbox="" /* v51.5: sin scripts ni same-origin; el preview es HTML estático */
                       style={{width:"100%", height:"100%", minHeight:"360px", border:"none", display:"block"}}
                       title="Previsualización del pedido"
                     />
@@ -3759,7 +3791,7 @@ const App = () => {
                 <h2 className="text-base font-bold text-gray-800">
                   Novedades de esta versión
                 </h2>
-                <p className="text-xs text-gray-400">Frutam · {APP_VERSION}</p>
+                <p className="text-xs text-gray-400">Frutam · {WHATSNEW_VERSION}</p>
               </div>
             </div>
 

@@ -156,9 +156,10 @@ const db = getFirestore(app);
 //  v55.1 mensajes claros si el correo de acceso está mal configurado o el proveedor
 //        Correo/contraseña no está habilitado (antes decía "Código incorrecto")
 //  v55.2 diagnóstico: si App Check falla, la consola muestra el motivo que da Google
-const APP_VERSION = "v55.2";
-const APP_VERSION_DATE = "27 Oct 2026";
-const WHATSNEW_VERSION = "v52";
+//  v55.3 modal de novedades v55 (resume v52 → v55 para quien viene de la v51.5)
+const APP_VERSION = "v55.3";
+const APP_VERSION_DATE = "28 Oct 2026";
+const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
 // v51.7: etiqueta de entorno inyectada por vite.config.ts ("" en producción)
 const ENV_LABEL = typeof __ENV_LABEL__ !== "undefined" ? __ENV_LABEL__ : "";
@@ -4088,9 +4089,12 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
       >
         <ul className="space-y-4">
           {[
-            { icon: "sparkles", title: "Nueva interfaz", desc: "Diseño más limpio, modo oscuro completo y pestañas para moverte entre los pedidos del mismo Mail ID." },
-            { icon: "checkCircle", title: "Avisos de guardado", desc: "Verás cuándo se guardan tus cambios y un aviso claro si algo falla al guardar o enviar." },
-            { icon: "chevronRight", title: "Teclado y celular", desc: "Las flechas respetan el cursor dentro del texto y en el celular puedes reordenar filas con ↑ ↓." },
+            { icon: "sparkles", title: "Nueva interfaz", desc: "Diseño más limpio, modo oscuro y pestañas para moverte entre los pedidos del mismo Mail ID." },
+            { icon: "building", title: "Compras directas", desc: "Botón «Directo» junto a Exporta: eliges la oficina (y el puerto en Costa Rica) y el correo incluye las fichas Consignee y Notify." },
+            { icon: "send", title: "Correo renovado", desc: "Tabla más clara y tamaños estándar. Al pegarlo en Outlook puedes escribir el saludo encima sin que tome el formato del pedido." },
+            { icon: "clock", title: "Se guarda al enviar", desc: "Lo que armas queda en pantalla y se guarda en la base solo al enviar, todo junto. Si cierras sin enviar, el navegador te avisa." },
+            { icon: "checkCircle", title: "Un proveedor y un Incoterm por Mail ID", desc: "Al cambiar el proveedor o FOB/FOT en un pedido, se aplica a todos los pedidos del mismo Mail ID." },
+            { icon: "lock", title: "Acceso con código", desc: "La app pide un código una sola vez por equipo. El aviso «también está editando» indica qué equipo es, y en tu perfil puedes cerrar sesión." },
           ].map(({ icon, title, desc }) => (
             <li key={title} className="flex items-start gap-3">
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary-soft text-primary"><Icon name={icon} className="h-4 w-4" /></span>

@@ -4,31 +4,55 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch: # permite relanzar el despliegue desde la pestaña Actions
+
+# El paso de despliegue escribe la rama gh-pages
+permissions:
+  contents: write
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
+
+      - name: Verificar configuración de Firebase
+        env:
+          PID: ${{ secrets.VITE_FIREBASE_PROJECT_ID || vars.VITE_FIREBASE_PROJECT_ID }}
+        run: |
+          if [ -z "$PID" ]; then
+            echo "::error::Faltan los secrets de Firebase (VITE_FIREBASE_PROJECT_ID vacío). Cárgalos en Settings → Secrets and variables → Actions (pestaña Variables o Secrets)."
+            exit 1
+          fi
+          if [ "${GITHUB_REPOSITORY#*/}" != "mi-proyecto-tailwindv2" ] && [ "$PID" = "pedidosfrutam-160cb" ]; then
+            echo "::error::Este repositorio de pruebas apunta a la base de datos de PRODUCCIÓN. Usa la configuración del proyecto de pruebas."
+            exit 1
+          fi
+          echo "Firebase: $PID · repo: $GITHUB_REPOSITORY"
 
       - name: Install dependencies
         run: npm install
 
       - name: Build
         env:
-          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
-          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
-          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
-          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
-          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
-          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
-          VITE_FIREBASE_MEASUREMENT_ID: ${{ secrets.VITE_FIREBASE_MEASUREMENT_ID }}
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY || vars.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN || vars.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID || vars.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET || vars.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID || vars.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID || vars.VITE_FIREBASE_APP_ID }}
+          VITE_FIREBASE_MEASUREMENT_ID: ${{ secrets.VITE_FIREBASE_MEASUREMENT_ID || vars.VITE_FIREBASE_MEASUREMENT_ID }}
+          # App Check (opcional): clave de sitio reCAPTCHA y proveedor ("enterprise" o vacío = v3)
+          VITE_RECAPTCHA_SITE_KEY: ${{ secrets.VITE_RECAPTCHA_SITE_KEY || vars.VITE_RECAPTCHA_SITE_KEY }}
+          VITE_APPCHECK_PROVIDER: ${{ secrets.VITE_APPCHECK_PROVIDER || vars.VITE_APPCHECK_PROVIDER }}
+          # Código de acceso (opcional): correo de la cuenta compartida de Firebase
+          VITE_ACCESS_EMAIL: ${{ secrets.VITE_ACCESS_EMAIL || vars.VITE_ACCESS_EMAIL }}
         run: npm run build
 
       - name: Deploy to gh-pages

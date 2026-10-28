@@ -1,1 +1,157 @@
 @import "tailwindcss";
+
+/* ── Modo oscuro por clase: <html class="dark"> (lo controla la app) ────────── */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ── Tokens de color: paleta corporativa sobria ───────────────────────────────
+   Neutros pizarra + un único azul de acción (alineado con el azul del correo).
+   Rojo solo para acciones destructivas. Cambiar un color = cambiarlo aquí. */
+:root {
+  --c-bg: #f3f5f8;
+  --c-surface: #ffffff;
+  --c-surface-2: #f8fafc;
+  --c-surface-3: #eef2f6;
+  --c-line: #e2e8f0;
+  --c-line-strong: #cbd5e1;
+  --c-fg: #0f172a;
+  --c-fg-2: #334155;
+  --c-muted: #64748b;
+  --c-subtle: #94a3b8;
+  --c-primary: #1d4ed8;
+  --c-primary-hover: #1e40af;
+  --c-primary-fg: #ffffff;
+  --c-primary-soft: #eff4ff;
+  --c-primary-line: #c7d7fe;
+  --c-danger: #b91c1c;
+  --c-danger-hover: #991b1b;
+  --c-danger-soft: #fef2f2;
+  --c-success: #15803d;
+  --c-success-soft: #f0fdf4;
+  --c-warning: #b45309;
+  --c-warning-soft: #fefce8;
+  --c-warning-line: #fde68a;
+  --c-ring: #2563eb;
+  --c-thead: #1e3a8a;
+  --c-thead-fg: #ffffff;
+  --c-overlay: rgb(15 23 42 / 0.45);
+  color-scheme: light;
+}
+
+.dark {
+  --c-bg: #0b1220;
+  --c-surface: #111a2b;
+  --c-surface-2: #162236;
+  --c-surface-3: #1c2a40;
+  --c-line: #26354d;
+  --c-line-strong: #34465f;
+  --c-fg: #e6ebf2;
+  --c-fg-2: #c3cddb;
+  --c-muted: #93a1b5;
+  --c-subtle: #6b7a90;
+  --c-primary: #4f86f7;
+  --c-primary-hover: #6b9bff;
+  --c-primary-fg: #0b1220;
+  --c-primary-soft: #16264a;
+  --c-primary-line: #2b4a86;
+  --c-danger: #f87171;
+  --c-danger-hover: #fca5a5;
+  --c-danger-soft: #2a1618;
+  --c-success: #4ade80;
+  --c-success-soft: #13261b;
+  --c-warning: #facc15;
+  --c-warning-soft: #2a2410;
+  --c-warning-line: #5c4b12;
+  --c-ring: #6b9bff;
+  --c-thead: #1f3a6b;
+  --c-thead-fg: #e6ebf2;
+  --c-overlay: rgb(2 6 23 / 0.65);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--c-bg);
+  --color-surface: var(--c-surface);
+  --color-surface-2: var(--c-surface-2);
+  --color-surface-3: var(--c-surface-3);
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+  --color-fg: var(--c-fg);
+  --color-fg-2: var(--c-fg-2);
+  --color-muted: var(--c-muted);
+  --color-subtle: var(--c-subtle);
+  --color-primary: var(--c-primary);
+  --color-primary-hover: var(--c-primary-hover);
+  --color-primary-fg: var(--c-primary-fg);
+  --color-primary-soft: var(--c-primary-soft);
+  --color-primary-line: var(--c-primary-line);
+  --color-danger: var(--c-danger);
+  --color-danger-hover: var(--c-danger-hover);
+  --color-danger-soft: var(--c-danger-soft);
+  --color-success: var(--c-success);
+  --color-success-soft: var(--c-success-soft);
+  --color-warning: var(--c-warning);
+  --color-warning-soft: var(--c-warning-soft);
+  --color-warning-line: var(--c-warning-line);
+  --color-ring: var(--c-ring);
+  --color-thead: var(--c-thead);
+  --color-thead-fg: var(--c-thead-fg);
+  --color-overlay: var(--c-overlay);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+@layer base {
+  html,
+  body {
+    background-color: var(--c-bg);
+    color: var(--c-fg);
+  }
+  body {
+    @apply font-sans antialiased;
+  }
+  /* Borde por defecto coherente (Tailwind v4 usa currentColor) */
+  *,
+  ::after,
+  ::before {
+    border-color: var(--c-line);
+  }
+  /* Foco visible y consistente para teclado */
+  :focus-visible {
+    outline: 2px solid var(--c-ring);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* Campo de formulario estándar */
+  .field {
+    @apply block w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-fg shadow-xs transition-colors placeholder:text-subtle;
+  }
+  .field:focus {
+    @apply border-primary outline-none ring-2 ring-primary/20;
+  }
+  .field[readonly] {
+    @apply bg-surface-2 text-muted;
+  }
+  /* Celda editable de la tabla */
+  .cell-input {
+    @apply w-full rounded-md border border-transparent bg-transparent px-2 py-0.5 text-center text-sm text-fg placeholder:text-subtle;
+  }
+  .cell-input:hover:not([readonly]) {
+    @apply border-line;
+  }
+  .cell-input:focus {
+    @apply border-primary bg-surface outline-none ring-2 ring-primary/20;
+  }
+  .label {
+    @apply mb-1.5 flex min-h-6 items-center text-xs font-medium text-muted;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

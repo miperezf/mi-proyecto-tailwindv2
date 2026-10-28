@@ -1,54 +1,41 @@
-# React + TypeScript + Vite
+# Pedidos Comercial Frutam
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Aplicación web para armar pedidos comerciales, agruparlos por **Mail ID** y generar el
+cuerpo del correo (HTML) que se pega en Outlook. Publicada en GitHub Pages:
+https://miperezf.github.io/mi-proyecto-tailwindv2/
 
-Currently, two official plugins are available:
+## Stack
+- React 19 + Vite 6 + Tailwind CSS v4
+- Firebase: Authentication (anónima) y Cloud Firestore
+- Despliegue: GitHub Actions → rama `gh-pages` en cada push a `main`
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default tseslint.config({
-  extends: [
-    // Remove ...tseslint.configs.recommended and replace with this
-    ...tseslint.configs.recommendedTypeChecked,
-    // Alternatively, use this for stricter rules
-    ...tseslint.configs.strictTypeChecked,
-    // Optionally, add this for stylistic rules
-    ...tseslint.configs.stylisticTypeChecked,
-  ],
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+## Desarrollo local
+```bash
+npm install
+cp .env.example .env.local   # completar con la configuración web de Firebase
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Variables requeridas (en local `.env.local`; en CI como *secrets* del repositorio):
+`VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`,
+`VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`,
+`VITE_FIREBASE_APP_ID`, `VITE_FIREBASE_MEASUREMENT_ID`.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+> La configuración web de Firebase no es secreta (queda en el bundle). La protección real
+> de los datos está en las **reglas de Firestore**.
 
-export default tseslint.config({
-  plugins: {
-    // Add the react-x and react-dom plugins
-    'react-x': reactX,
-    'react-dom': reactDom,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended typescript rules
-    ...reactX.configs['recommended-typescript'].rules,
-    ...reactDom.configs.recommended.rules,
-  },
-})
-```
+## Datos (Firestore)
+- `artifacts/{projectId}/public/data/pedidos/{id}` → `{ header, items }`
+  - `items` se guarda como string JSON.
+  - `header.status`: `draft` | `sent` | `deleted` (borrado lógico; nunca se borra físicamente).
+- `artifacts/{projectId}/public/data/presence/{mailId}/users/{uid}` → aviso de edición simultánea.
+
+## Versionado
+- `APP_VERSION` / `APP_VERSION_DATE` en `src/App.tsx`: subir en cada release.
+- `WHATSNEW_VERSION`: cambiar solo cuando cambie el contenido del modal de novedades.
+- Cada build publica `version.json` (SHA del commit). La app lo consulta cada 5 min y
+  avisa cuando hay una versión nueva.
+
+## Seguridad
+- Nunca subir credenciales de servicio (`*adminsdk*.json`); están en `.gitignore`.
+- Los scripts con Firebase Admin SDK deben ejecutarse fuera de este repositorio.

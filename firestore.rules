@@ -1,0 +1,103 @@
+rules_version = '2';
+// Reglas de Firestore — Pedidos Comercial Frutam
+// Copia de referencia: se publican a mano en Firebase Console → Firestore → Reglas.
+// En el proyecto de PRUEBAS, reemplazar "pedidosfrutam-160cb" (2 veces) por su ID.
+//
+// Lógica de negocio: cualquier usuario autenticado puede leer, crear y editar
+// cualquier pedido (los pedidos se recuperan y reenvían por Mail ID).
+// Estas reglas solo agregan: forma válida de los datos, createdBy/createdAt
+// inmutables, lastModifiedBy no suplantable y sin borrado físico.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Quién puede usar la base ──────────────────────────────────────────────
+    // ETAPA 1 (hoy): cualquier sesión de Firebase (anónima o con código).
+    // ETAPA 2 (después de activar el código de acceso y comprobar que entra):
+    //   comentar la línea de ETAPA 1 y descomentar la de ETAPA 2. Desde ahí solo
+    //   la cuenta compartida (correo de VITE_ACCESS_EMAIL + código) lee y escribe.
+    function signedIn() { return request.auth != null; }                        // ETAPA 1
+    // function signedIn() { return request.auth != null                          // ETAPA 2
+    //   && request.auth.token.firebase.sign_in_provider == 'password'
+    //   && request.auth.token.email == 'equipo@pedidos-frutam.app'; }
+
+    // Presencia: con la cuenta compartida todos tienen la misma uid; cada equipo
+    // escribe su documento como "uid_EQUIPO" (EQUIPO = 6 letras/números del navegador).
+    // Se acepta también la forma antigua (solo uid) mientras se usa la app anónima.
+    function presenciaPropia(userId) {
+      return userId == request.auth.uid
+        || userId.matches(request.auth.uid + '_[A-Z0-9]{6}');
+    }
+
+    function editableHeaderKeys() {
+      return ['reDestinatarios','deNombrePais','nave','fechaCarga','exporta',
+              'emailSubject','mailId','incoterm','status','lastModifiedBy','updatedAt'];
+    }
+
+    function strOk(h, changed, key, max) {
+      return !changed.hasAny([key]) || h[key] == null
+        || (h[key] is string && h[key].size() <= max);
+    }
+
+    // Valida solo los campos que cambian (compatible con documentos antiguos)
+    function validHeader(h, changed) {
+      return strOk(h, changed, 'reDestinatarios', 120)
+        && strOk(h, changed, 'deNombrePais', 80)
+        && strOk(h, changed, 'nave', 120)
+        && strOk(h, changed, 'exporta', 120)
+        && strOk(h, changed, 'emailSubject', 200)
+        && strOk(h, changed, 'fechaCarga', 10)
+        && (!changed.hasAny(['fechaCarga']) || h.fechaCarga == null || h.fechaCarga == ''
+            || h.fechaCarga.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
+        && (!changed.hasAny(['mailId']) || (h.mailId is string && h.mailId.matches('^[A-Z0-9]{4,12}$')))
+        && (!changed.hasAny(['status'])   || h.status in ['draft', 'sent', 'deleted'])
+        && (!changed.hasAny(['incoterm']) || h.incoterm in ['FOB', 'FOT']);
+    }
+
+    function itemsOk(changedDoc) {
+      return !changedDoc.hasAny(['items'])
+        || (request.resource.data.items is string && request.resource.data.items.size() <= 200000);
+    }
+
+    function validCreate() {
+      let d = request.resource.data;
+      let h = d.header;
+      return d.keys().hasOnly(['header', 'items'])
+        && h.keys().hasOnly(editableHeaderKeys().concat(['createdBy', 'createdAt']))
+        && h.createdBy == request.auth.uid
+        && h.lastModifiedBy == request.auth.uid
+        && h.status in ['draft', 'sent']   // v54.0: los pedidos se crean al enviar
+        && validHeader(h, h.keys())
+        && itemsOk(d.keys());
+    }
+
+    function validUpdate() {
+      let changedDoc = request.resource.data.diff(resource.data).affectedKeys();
+      let after = request.resource.data.header;
+      let changed = after.diff(resource.data.header).affectedKeys();
+      return changedDoc.hasOnly(['header', 'items'])
+        && changed.hasOnly(editableHeaderKeys())          // createdBy/createdAt inmutables
+        && (!changed.hasAny(['lastModifiedBy']) || after.lastModifiedBy == request.auth.uid)
+        && validHeader(after, changed)
+        && itemsOk(changedDoc);
+    }
+
+    match /artifacts/pedidosfrutam-160cb/public/data/pedidos/{docId} {
+      allow read:   if signedIn();
+      allow create: if signedIn() && validCreate();
+      allow update: if signedIn() && validUpdate();
+      allow delete: if false;   // la app solo hace soft-delete; Admin SDK no se ve afectado
+    }
+
+    match /artifacts/pedidosfrutam-160cb/public/data/presence/{mailId}/users/{userId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && presenciaPropia(userId)
+        && mailId.matches('^[A-Z0-9]{4,12}$')
+        && request.resource.data.keys().hasOnly(['userId', 'openedAt', 'expiresAt'])
+        && request.resource.data.userId == userId
+        && request.resource.data.expiresAt is number
+        && request.resource.data.expiresAt <= request.time.toMillis() + 900000;
+      allow delete: if signedIn() && presenciaPropia(userId);
+    }
+  }
+}

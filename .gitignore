@@ -25,3 +25,8 @@ dist-ssr
 
 .env
 .env.local
+
+# Credenciales y exportaciones locales (nunca al repo)
+*adminsdk*.json
+serviceAccount*.json
+pedidos_*.json

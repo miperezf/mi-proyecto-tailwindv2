@@ -1,7 +1,7 @@
 rules_version = '2';
 // Reglas de Firestore — Pedidos Comercial Frutam
 // Copia de referencia: se publican a mano en Firebase Console → Firestore → Reglas.
-// En el proyecto de PRUEBAS, reemplazar "pedidosfrutam-160cb" (2 veces) por su ID.
+// En el proyecto de PRUEBAS, reemplazar "pedidosfrutam-160cb" (todas las veces, 4) por su ID.
 //
 // Lógica de negocio: cualquier usuario autenticado puede leer, crear y editar
 // cualquier pedido (los pedidos se recuperan y reenvían por Mail ID).
@@ -86,6 +86,47 @@ service cloud.firestore {
       allow create: if signedIn() && validCreate();
       allow update: if signedIn() && validUpdate();
       allow delete: if false;   // la app solo hace soft-delete; Admin SDK no se ve afectado
+    }
+
+    // ── v56.0: PEDIDOS SEMANALES ───────────────────────────────────────────────
+    // Se guardan al momento (no al enviar). Cualquier sesión válida lee y escribe,
+    // igual que los pedidos. Aquí SÍ se permite borrar: la sección tiene
+    // "Borrar especie", "Borrar semana" y "Eliminar" en el catálogo.
+    function nombreOk(x) { return x is string && x.size() > 0 && x.size() <= 120; }
+
+    // Catálogo: { especies: [..], mercados: [{code,nombre,empresa}], proveedores: [{nombre,especies}] }
+    match /artifacts/pedidosfrutam-160cb/public/data/config/catalogo {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && request.resource.data.keys().hasOnly(['especies', 'mercados', 'proveedores'])
+        && request.resource.data.especies is list && request.resource.data.especies.size() <= 500
+        && request.resource.data.mercados is list && request.resource.data.mercados.size() <= 50
+        && request.resource.data.proveedores is list && request.resource.data.proveedores.size() <= 1000;
+      allow delete: if false;
+    }
+
+    // Semana: id "AAAA-Www" → { semana, pedido: { especie: { mercado: cajas } }, actualizado }
+    match /artifacts/pedidosfrutam-160cb/public/data/semanas/{semanaId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && semanaId.matches('^[0-9]{4}-W[0-9]{2}$')
+        && request.resource.data.keys().hasOnly(['semana', 'pedido', 'actualizado'])
+        && request.resource.data.semana == semanaId
+        && (!('pedido' in request.resource.data) || request.resource.data.pedido is map)
+        && (!('actualizado' in request.resource.data) || request.resource.data.actualizado is number);
+      allow delete: if signedIn();
+
+      // Asignación: { proveedor, especie, mercado, cajas, creado }
+      match /asignaciones/{asigId} {
+        allow read: if signedIn();
+        allow create, update: if signedIn()
+          && request.resource.data.keys().hasOnly(['proveedor', 'especie', 'mercado', 'cajas', 'creado'])
+          && nombreOk(request.resource.data.proveedor)
+          && nombreOk(request.resource.data.especie)
+          && request.resource.data.mercado is string && request.resource.data.mercado.size() <= 12
+          && request.resource.data.cajas is number && request.resource.data.cajas > 0 && request.resource.data.cajas <= 100000;
+        allow delete: if signedIn();
+      }
     }
 
     match /artifacts/pedidosfrutam-160cb/public/data/presence/{mailId}/users/{userId} {

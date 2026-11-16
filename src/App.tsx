@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Icon, Spinner, Button, IconButton, Badge, Modal, useConfirm, useToasts } from "./ui";
+import { MenuSecciones, seccionDesdeHash, hashDeSeccion, type SeccionId } from "./SideNav";
+import PedidosSemanales from "./semanal/PedidosSemanales";
+import { firestoreStore } from "./semanal/firestore";
 import { detectarDirecto, exportaDirecto, oficinasDePais, datosFicha, fichasOficina, normalizarTexto } from "./oficinas";
 import {
   ACCESS_EMAIL, CODIGO_ACTIVO, EQUIPO_ID, PantallaCodigo, esCuentaCompartida, idPresencia, etiquetaPresencia,
   registrarEnviado, recordarUidAnterior, esEnvioDeEsteEquipo, mensajeErrorCodigo, CORREO_VALIDO,
 } from "./acceso";
+import { CapaSugerencias, actualizarSugerencias, registrarEnviados } from "./sugerencias";
 import { initializeApp } from "firebase/app";
 import { initializeAppCheck, ReCaptchaV3Provider, ReCaptchaEnterpriseProvider } from "firebase/app-check";
 import {
@@ -157,9 +161,49 @@ const db = getFirestore(app);
 //        Correo/contraseña no está habilitado (antes decía "Código incorrecto")
 //  v55.2 diagnóstico: si App Check falla, la consola muestra el motivo que da Google
 //  v55.3 modal de novedades v55 (resume v52 → v55 para quien viene de la v51.5)
-const APP_VERSION = "v55.3";
-const APP_VERSION_DATE = "28 Oct 2026";
-const WHATSNEW_VERSION = "v55";
+//  v56.0 menú de secciones y nueva sección "Pedidos
+//        semanales" (#/semanal): pedido por especie y mercado, asignación a proveedores,
+//        vista por proveedor y catálogo. Se guarda al momento en semanas/ y config/catalogo.
+//        Pedidos por Mail ID no cambia y su trabajo sin enviar se conserva al cambiar de sección.
+//  v56.1 menú más sutil: botón ☰ en la barra superior (todas las pantallas), sin barra
+//        lateral fija; aviso claro si Firebase rechaza el acceso a Pedidos semanales.
+//  v56.2 menú lateral: el ☰ despliega un panel desde la izquierda bajo la barra superior
+//        (el botón pasa a ✕); se cierra al elegir sección, con ✕, Esc o tocando fuera.
+//  v56.3 Pedidos semanales: vista Resumen (matriz Proveedor/Especie × Oficina con
+//        contenedores y cuadratura por oficina: 21 pallets manzana, 20 resto, mezcla permitida);
+//        las cantidades se rotulan como pallets.
+//  v56.4 Pedidos semanales: ordenar los bloques de especie arrastrando desde ⠿ (o ↑ ↓);
+//        el orden se guarda en el catálogo y es el mismo en todas las semanas y en Resumen.
+//  v56.5 sugerencias al escribir (proveedor, país, nave, exporta, especie, variedad,
+//        formato, calibre, categoría) desde los pedidos enviados de los últimos 90
+//        días; sin chocar con la navegación por flechas. Reemplaza el datalist nativo.
+//  v57.0 Pedidos semanales: el pedido se arma en una sola tabla editable (Especie × Oficina):
+//        cada especie es una fila con el pedido por oficina y lo que falta asignar; al abrirla
+//        se editan sus proveedores. Reemplaza las vistas "Por especie" y "Resumen".
+//  v57.1 Pedidos semanales: "Copiar especies y proveedores" de la última semana con datos
+//        (sin cantidades); las filas aún sin pallets se recuerdan en el equipo.
+//  v57.2 El botón de copiar solo aparece al iniciar una semana vacía.
+//  v58.0 Pedidos semanales, rediseño "mínimo": solo se marca lo que falta (amarillo) o sobra
+//        (rojo); contenedores y cuadratura por oficina en el encabezado; una sola barra con
+//        Pedido · Proveedores (consulta unificada + copiar pedido) y botón de pantalla completa.
+//  v58.1 El ⠿ para ordenar especies queda siempre visible; se quita "Copiar pedido".
+//  v58.2 Las celdas vuelven a mostrar su caja (pedido por oficina y proveedores); se quita el
+//        número rojo "+n" de lo asignado de más (queda la caja en rojo suave).
+//  v58.3 Las celdas vuelven a quedar sin caja (el borde aparece al pasar el mouse o escribir).
+//  v58.4 Las celdas del pedido ya no se pintan: estado de asignación en texto al final de la fila
+//        y fila "Falta" al abrir la especie; contenedores completos y pallets sueltos al pie;
+//        botón Abrir todo / Cerrar todo más visible.
+//  v58.5 Menú "Totales": elegir qué filas del pie se ven (pedido, asignado, contenedores
+//        completos, pallets sueltos): una, varias, todas o ninguna. Se recuerda en el equipo.
+//  v58.6 "+ Agregar especie" un poco más visible (borde punteado).
+//  v58.7 "+ Agregar proveedor" con el mismo estilo que "+ Agregar especie".
+//  v58.8 Flechas como en una planilla: ← → siempre pasan a la celda vecina (F2 o segundo clic
+//        para editar dentro del número), Esc deshace; los buscadores "+ Agregar" ya no abren
+//        su lista al pasar con las flechas (se abre al hacer clic, escribir o Alt+↓).
+//  v58.9 modal de novedades v58 (menú, Pedidos semanales y sugerencias al escribir).
+const APP_VERSION = "v58.9";
+const APP_VERSION_DATE = "16 Nov 2026";
+const WHATSNEW_VERSION = "v58";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
 // v51.7: etiqueta de entorno inyectada por vite.config.ts ("" en producción)
 const ENV_LABEL = typeof __ENV_LABEL__ !== "undefined" ? __ENV_LABEL__ : "";
@@ -227,6 +271,8 @@ const TableInput = React.forwardRef(
       inputMode,
       ariaLabel,
       variant = "cell",
+      especie,
+      sugBase,
     },
     ref
   ) => {
@@ -251,6 +297,8 @@ const TableInput = React.forwardRef(
         readOnly={readOnly}
         list={list}
         autoComplete="off"
+        data-especie={especie || undefined}
+        data-sug-base={sugBase || undefined}
       />
     );
   }
@@ -290,6 +338,7 @@ const initialItemState = {
 // No incluye status/createdBy/createdAt/mailId/emailSubject a propósito.
 // ── v51.3: la lista de variedades de manzana debe ofrecerse tanto para
 // "MANZANA" (singular, el valor normalizado y el placeholder) como "MANZANAS".
+const APPLE_VARIETIES = ["GALA", "GRANNY", "FUJI", "PINK LADY", "ROJA", "CRIPPS PINK"];
 const isAppleSpecies = (especie) => {
   const v = especie ? especie.toUpperCase() : "";
   return v === "MANZANA" || v === "MANZANAS";
@@ -385,6 +434,25 @@ const App = () => {
 
   // v52: avisos, confirmaciones y estados de trabajo en curso
   const [toastsEl, notify] = useToasts();
+
+  // ─── v56.0: SECCIONES Y MENÚ LATERAL ─────────────────────────────────────────
+  const [seccion, setSeccion] = useState<SeccionId>(() => seccionDesdeHash());
+  const [semanalAbierta, setSemanalAbierta] = useState(() => seccionDesdeHash() === "semanal");
+  const [menuAbierto, setMenuAbierto] = useState(false);
+  const [semanalFull, setSemanalFull] = useState(false); // v58.0: pantalla completa de Pedidos semanales
+  const barraRef = useRef<HTMLElement>(null);
+  const semanalStore = React.useMemo(() => firestoreStore(db, appId), [appId]);
+  useEffect(() => {
+    const alCambiar = () => { const s = seccionDesdeHash(); setSeccion(s); if (s === "semanal") setSemanalAbierta(true); };
+    window.addEventListener("hashchange", alCambiar);
+    return () => window.removeEventListener("hashchange", alCambiar);
+  }, []);
+  const irASeccion = (id: SeccionId) => {
+    if (id === "semanal") setSemanalAbierta(true);
+    setSeccion(id);
+    if (window.location.hash !== hashDeSeccion(id)) window.location.hash = hashDeSeccion(id);
+    window.scrollTo(0, 0);
+  };
   const [confirmEl, askConfirm] = useConfirm();
   const [saveState, setSaveState] = useState("idle"); // idle | local | saving | saved | error
   const [isSending, setIsSending] = useState(false);
@@ -2402,6 +2470,7 @@ ${directoBlock}
       });
       await batch.commit();
       registrarEnviado(mailGlobalId); // v55.0: historial de este equipo
+      registrarEnviados(appId, ordersToProcess); // v56.0: sugerencias al escribir
       pendingDeletesRef.current = new Set();
 
 
@@ -2990,6 +3059,11 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
     if (ok) window.location.reload();
   };
 
+  // ── v56.0: sugerencias al escribir (una consulta al día por navegador) ──
+  useEffect(() => {
+    if (isAuthReady && userId) actualizarSugerencias(db, appId);
+  }, [isAuthReady, userId]);
+
   // ── v55.0: código de acceso ─────────────────────────────────────────────
   const ingresarConCodigo = async (codigo) => {
     if (!CORREO_VALIDO) return mensajeErrorCodigo("config/correo");
@@ -3300,16 +3374,22 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
     onBlur: handleBlurField((e) => handleItemBlur(item.id, e)),
     readOnly: item.isCanceled || currentOrderIsDeleted,
     isCanceledProp: item.isCanceled || currentOrderIsDeleted,
-    ...(field.apple && isAppleSpecies(item.especie) ? { list: "apple-varieties" } : {}),
+    // v56.0: sugerencias propias (la especie de la fila ordena las opciones; las
+    // variedades de manzana se ofrecen como base). Reemplaza el datalist nativo.
+    especie: item.especie,
+    ...(field.apple && isAppleSpecies(item.especie) ? { sugBase: APPLE_VARIETIES.join("|") } : {}),
   });
 
+  const modoCompleto = seccion === "semanal" && semanalFull;
   return (
     <div className="flex min-h-screen flex-col bg-bg text-fg">
-      {envBanner}
+      {!modoCompleto && envBanner}
 
       {/* ── BARRA SUPERIOR ─────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-3 sm:px-6">
+      <header ref={barraRef} className={`sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur ${modoCompleto ? "hidden" : ""}`}>
+        <div className="flex h-14 w-full items-center gap-3 px-3 sm:px-4">
+          <IconButton label={menuAbierto ? "Cerrar menú" : "Menú"} icon={menuAbierto ? "x" : "menu"}
+            onClick={() => setMenuAbierto((v) => !v)} aria-expanded={menuAbierto} />
           {vpcLogo}
           <div className="min-w-0 flex-1 border-l border-line pl-3">
             <h1 className="truncate text-sm font-semibold text-fg sm:text-base">Pedidos Comercial Frutam</h1>
@@ -3335,6 +3415,9 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
         </div>
       </header>
 
+      <div className="flex min-h-0 flex-1">
+      {/* v56.0: Pedidos por Mail ID queda montado (solo se oculta) para no perder trabajo sin enviar */}
+      <div className={`min-w-0 flex-1 flex-col ${seccion === "pedidos" ? "flex" : "hidden"}`}>
       <main className="mx-auto w-full max-w-6xl flex-1 space-y-4 px-3 pt-4 pb-6 sm:px-6 sm:pt-6">
         {/* ── BÚSQUEDA + ESTADO DEL MAIL ID ────────────────────────────────── */}
         <section className="rounded-2xl border border-line bg-surface p-4 shadow-xs sm:p-5">
@@ -3888,6 +3971,14 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
           </Button>
         </div>
       </div>
+      </div>
+      {semanalAbierta && (
+        <div className={`min-w-0 flex-1 flex-col ${seccion === "semanal" ? "flex" : "hidden"}`}>
+          <PedidosSemanales store={semanalStore} notify={notify} onPantallaCompleta={setSemanalFull} />
+        </div>
+      )}
+      </div>
+      <MenuSecciones open={menuAbierto} onClose={() => setMenuAbierto(false)} activa={seccion} onChange={irASeccion} anclaRef={barraRef} />
 
       {/* ── MODAL: FINALIZAR / PREVISUALIZAR / ENVIAR ──────────────────────── */}
       <Modal
@@ -4008,14 +4099,7 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
         <p className="text-xs text-muted">Si lo abres igual, los cambios de ambos podrían solaparse y perderse información.</p>
       </Modal>
 
-      <datalist id="apple-varieties">
-        <option value="GALA" />
-        <option value="GRANNY" />
-        <option value="FUJI" />
-        <option value="PINK LADY" />
-        <option value="ROJA" />
-        <option value="CRIPPS PINK" />
-      </datalist>
+      <CapaSugerencias />
 
       {/* ── PANEL: HISTORIAL DE ENVÍOS ─────────────────────────────────────── */}
       <Modal
@@ -4089,12 +4173,13 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
       >
         <ul className="space-y-4">
           {[
-            { icon: "sparkles", title: "Nueva interfaz", desc: "Diseño más limpio, modo oscuro y pestañas para moverte entre los pedidos del mismo Mail ID." },
-            { icon: "building", title: "Compras directas", desc: "Botón «Directo» junto a Exporta: eliges la oficina (y el puerto en Costa Rica) y el correo incluye las fichas Consignee y Notify." },
-            { icon: "send", title: "Correo renovado", desc: "Tabla más clara y tamaños estándar. Al pegarlo en Outlook puedes escribir el saludo encima sin que tome el formato del pedido." },
-            { icon: "clock", title: "Se guarda al enviar", desc: "Lo que armas queda en pantalla y se guarda en la base solo al enviar, todo junto. Si cierras sin enviar, el navegador te avisa." },
-            { icon: "checkCircle", title: "Un proveedor y un Incoterm por Mail ID", desc: "Al cambiar el proveedor o FOB/FOT en un pedido, se aplica a todos los pedidos del mismo Mail ID." },
-            { icon: "lock", title: "Acceso con código", desc: "La app pide un código una sola vez por equipo. El aviso «también está editando» indica qué equipo es, y en tu perfil puedes cerrar sesión." },
+            { icon: "menu", title: "Menú de secciones", desc: "El botón ☰ de arriba a la izquierda abre el menú para pasar entre Pedidos por Mail ID y la nueva sección Pedidos semanales." },
+            { icon: "table", title: "Pedidos semanales", desc: "Una tabla por semana: en la fila de cada especie digitas el pedido por oficina y, al abrirla, asignas los pallets a cada proveedor. Cada cambio se guarda al momento." },
+            { icon: "duplicate", title: "Partir desde la semana anterior", desc: "En una semana vacía puedes copiar las especies y proveedores de la última semana con datos, sin cantidades." },
+            { icon: "checkCircle", title: "Asignación y contenedores", desc: "Al final de cada fila ves si falta asignar. Al pie, los contenedores completos y los pallets sueltos de cada oficina; el menú «Totales» elige qué filas mostrar." },
+            { icon: "users", title: "Proveedores", desc: "Consulta cuánto se compra a cada proveedor, por oficina o por especie." },
+            { icon: "expand", title: "Teclado y pantalla completa", desc: "Te mueves entre celdas con las flechas y Enter como en una planilla, ordenas las especies arrastrando ⠿ y amplías la tabla con el botón de pantalla completa." },
+            { icon: "bulb", title: "Sugerencias al escribir", desc: "En Pedidos por Mail ID, los campos proponen lo usado en los pedidos enviados de los últimos 90 días: proveedor, país, nave, especie, variedad y más." },
           ].map(({ icon, title, desc }) => (
             <li key={title} className="flex items-start gap-3">
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary-soft text-primary"><Icon name={icon} className="h-4 w-4" /></span>

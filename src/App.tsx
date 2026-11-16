@@ -201,7 +201,8 @@ const db = getFirestore(app);
 //        para editar dentro del número), Esc deshace; los buscadores "+ Agregar" ya no abren
 //        su lista al pasar con las flechas (se abre al hacer clic, escribir o Alt+↓).
 //  v58.9 modal de novedades v58 (menú, Pedidos semanales y sugerencias al escribir).
-const APP_VERSION = "v58.9";
+//  v58.10 "Copiar especies y proveedores" también toma una semana armada sin cantidades todavía.
+const APP_VERSION = "v58.10";
 const APP_VERSION_DATE = "16 Nov 2026";
 const WHATSNEW_VERSION = "v58";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;

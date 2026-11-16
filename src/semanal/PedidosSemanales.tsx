@@ -432,21 +432,28 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
   };
 
   // ── Copiar especies y proveedores (sin cantidades) de la última semana con datos ──
+  // Vale como origen una semana con pedido guardado o con filas armadas en este equipo
+  // (especies y proveedores agregados que todavía no tienen cantidades).
+  const filasLocales = (w: string) => (extraEsp[w]?.length || 0) > 0 || Object.values(extraProv[w] || {}).some((l) => l.length > 0);
   const semanaOrigen = useMemo(() => {
-    const prev = Object.keys(semanas).filter((w) => w < semana).sort().reverse();
+    const prev = [...new Set([...Object.keys(semanas), ...Object.keys(extraEsp), ...Object.keys(extraProv)])].filter((w) => w < semana).sort().reverse();
     const conPedido = (w: string) => Object.values(semanas[w]?.pedido || {}).some((r) => Object.values(r || {}).some((v) => +v > 0));
-    return prev.find(conPedido) || prev[0] || "";
-  }, [semanas, semana]);
+    return prev.find((w) => conPedido(w) || filasLocales(w)) || prev.find((w) => w in semanas) || "";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [semanas, semana, extraEsp, extraProv]);
   const copiarEstructura = async () => {
     const src = semanaOrigen, dst = semana; if (!src || copiando) return;
     setCopiando(true);
     try {
       const lista = (await store.listAsig(src)).filter((a) => +a.cajas > 0);
       const ped = semanasRef.current[src]?.pedido || {};
-      const esps = [...new Set([...Object.keys(ped).filter((e) => Object.values(ped[e] || {}).some((v) => +v > 0)), ...lista.map((a) => a.especie)])];
-      if (!esps.length) { notify("info", `${weekShort(src)} no tiene especies ni proveedores para copiar.`, 4000); return; }
+      const locEsp = extraEsp[src] || []; const locProv = extraProv[src] || {};
       const provs: Record<string, string[]> = {};
-      for (const a of lista) { const l = (provs[a.especie] ||= []); if (!l.includes(a.proveedor)) l.push(a.proveedor); }
+      const sumar = (e: string, n: string) => { const l = (provs[e] ||= []); if (!l.includes(n)) l.push(n); };
+      for (const a of lista) sumar(a.especie, a.proveedor);
+      for (const [e, l] of Object.entries(locProv)) for (const n of l) sumar(e, n);
+      const esps = [...new Set([...Object.keys(ped).filter((e) => Object.values(ped[e] || {}).some((v) => +v > 0)), ...lista.map((a) => a.especie), ...locEsp, ...Object.keys(provs)])];
+      if (!esps.length) { notify("info", `${weekShort(src)} no tiene especies ni proveedores para copiar.`, 4000); return; }
       setExtraEsp((x) => ({ ...x, [dst]: [...new Set([...(x[dst] || []), ...esps])] }));
       setExtraProv((x) => { const w = { ...(x[dst] || {}) }; for (const [e, l] of Object.entries(provs)) w[e] = [...new Set([...(w[e] || []), ...l])]; return { ...x, [dst]: w }; });
       setAbiertas((a) => ({ ...a, ...Object.fromEntries(esps.map((e) => [e, true])) }));

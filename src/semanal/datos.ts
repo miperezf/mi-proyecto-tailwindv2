@@ -3,13 +3,67 @@
 // lógica se prueba con un almacenamiento en memoria y en la app usa Firestore
 // (ver ./firestore.ts).
 
-export type Mercado = { code: string; nombre: string; empresa: string };
+/** code = clave interna única (la que usan pedidos y asignaciones). etiqueta = código que se
+ *  muestra, solo cuando difiere de code (p. ej. COL de Polar guardado como "COL-P" porque
+ *  Frutam ya usa "COL"). */
+export type Mercado = { code: string; nombre: string; empresa: string; etiqueta?: string };
+export const etiquetaMk = (m: Pick<Mercado, "code" | "etiqueta">) => m.etiqueta || m.code;
+/** Clave interna para un mercado nuevo o editado: el código visible si está libre; si otra
+ *  empresa ya lo usa, código + "-F"/"-P". null si ese código ya existe en la misma empresa. */
+export function claveMercado(visible: string, empresa: string, otros: Mercado[]): string | null {
+  const v = visible.trim().toUpperCase();
+  if (otros.some((m) => (m.empresa || "Frutam") === empresa && etiquetaMk(m) === v)) return null;
+  if (!otros.some((m) => m.code === v)) return v;
+  const k = `${v}-${empresa === "Polar" ? "P" : "F"}`;
+  return otros.some((m) => m.code === k) ? null : k;
+}
+// ── Mayúsculas ordenadas: cada palabra con la primera letra en mayúscula ─────
+// "manzana GALA" → "Manzana Gala" · "GaRcEs" → "Garces". Se respetan las unidades y cifras
+// ("16 kg", "7,2 kg") y los apóstrofos ("D'Anjou"). En proveedores (siglas=true) también
+// se respetan las siglas: "PFI", "VPC" (hasta 3 letras ya en mayúscula), "S.A.", "C&L".
+const UNIDADES = new Set(["kg", "g", "gr", "lb", "lbs", "ml", "cc", "lt", "lts"]);
+const capPalabra = (w: string, siglas: boolean): string => {
+  if (!w) return w;
+  const lw = w.toLocaleLowerCase("es");
+  if (UNIDADES.has(lw)) return lw;
+  if (/\d/.test(w)) return w;
+  const letras = w.replace(/[^A-Za-zÁÉÍÓÚÑÜáéíóúñü]/g, "");
+  if (siglas && /[.&]/.test(w) && letras.length <= 4) return w.toLocaleUpperCase("es");            // S.A., C&L
+  if (siglas && letras && letras === letras.toLocaleUpperCase("es") && letras.length <= 3) return w; // PFI, VPC
+  const ap = /^([A-Za-z])['’](.+)$/.exec(w);
+  if (ap) return ap[1].toUpperCase() + "'" + capPalabra(ap[2], siglas);
+  return w.charAt(0).toLocaleUpperCase("es") + w.slice(1).toLocaleLowerCase("es");
+};
+export function capitalizar(x: string, siglas = false): string {
+  return x.trim().replace(/\s+/g, " ").split(/(\s|\/|-|\()/).map((p) => (/^(\s|\/|-|\()$/.test(p) || !p ? p : capPalabra(p, siglas))).join("");
+}
+/** Para nombres de proveedores: respeta siglas (PFI, S.A.) */
+export const capitalizarProv = (x: string) => capitalizar(x, true);
+
+/** Columnas agrupadas por empresa, en el orden recibido (catálogo: Frutam y luego Polar). */
+export function gruposEmpresa(codes: string[], mks: Mercado[]): { empresa: string; codes: string[] }[] {
+  const out: { empresa: string; codes: string[] }[] = [];
+  for (const c of codes) {
+    const e = mks.find((m) => m.code === c)?.empresa || "Otros";
+    const g = out[out.length - 1];
+    if (g && g.empresa === e) g.codes.push(c); else out.push({ empresa: e, codes: [c] });
+  }
+  return out;
+}
 export type Proveedor = { nombre: string; especies: string[] };
 export type Catalogo = { especies: string[]; mercados: Mercado[]; proveedores: Proveedor[] };
 /** pedido[especie][mercado] = pallets (el campo de las asignaciones se llama "cajas" por historia) */
 export type Pedido = Record<string, Record<string, number>>;
-export type Semana = { semana: string; pedido?: Pedido; actualizado?: number };
-export type Asig = { id: string; proveedor: string; especie: string; mercado: string; cajas: number; creado?: number };
+/** Vía de transporte. Todo lo guardado antes de v59 es marítimo (no lleva marca). */
+export type Via = "maritimo" | "aereo";
+export const VIAS: Via[] = ["maritimo", "aereo"];
+/** pedido = marítimo (campo histórico) · aereo = pedido aéreo, misma forma */
+export type Semana = { semana: string; pedido?: Pedido; aereo?: Pedido; actualizado?: number };
+/** via solo se guarda si es "aereo"; sin via = marítimo */
+export type Asig = { id: string; proveedor: string; especie: string; mercado: string; cajas: number; creado?: number; via?: "aereo" };
+export const viaDe = (a: { via?: string }): Via => (a.via === "aereo" ? "aereo" : "maritimo");
+export const campoPedido = (via: Via) => (via === "aereo" ? "aereo" : "pedido");
+export const pedidoDe = (s: Semana | undefined | null, via: Via): Pedido => (via === "aereo" ? s?.aereo : s?.pedido) || {};
 export type AsigData = Omit<Asig, "id">;
 type Unsub = () => void;
 
@@ -18,12 +72,12 @@ export interface SemanalStore {
   subSemanas(cb: (s: Record<string, Semana>) => void, err: (e: unknown) => void): Unsub;
   subAsig(semana: string, cb: (a: Asig[]) => void, err: (e: unknown) => void): Unsub;
   setCatalogo(c: Catalogo): Promise<void>;
-  /** Escribe una celda del pedido (crea la semana si no existe). */
-  setPedidoCelda(semana: string, especie: string, mercado: string, cajas: number): Promise<void>;
-  /** Reemplaza el pedido completo de la semana. */
-  setPedido(semana: string, pedido: Pedido): Promise<void>;
-  /** Quita una especie del pedido de la semana. */
-  borrarEspeciePedido(semana: string, especie: string): Promise<void>;
+  /** Escribe una celda del pedido de una vía (crea la semana si no existe). */
+  setPedidoCelda(semana: string, especie: string, mercado: string, cajas: number, via?: Via): Promise<void>;
+  /** Reemplaza el pedido completo de una vía (la semana debe existir; no toca la otra vía). */
+  setPedido(semana: string, pedido: Pedido, via?: Via): Promise<void>;
+  /** Quita una especie del pedido de una vía. */
+  borrarEspeciePedido(semana: string, especie: string, via?: Via): Promise<void>;
   /** Marca la semana como usada (para que aparezca en la lista de semanas). */
   tocarSemana(semana: string): Promise<void>;
   borrarSemana(semana: string): Promise<void>;
@@ -121,9 +175,9 @@ export const FAMILIAS: [string, string[]][] = [
 export const familia = (e: string) => { for (const [f, pre] of FAMILIAS) if (pre.some((x) => e.startsWith(x))) return f; return "Otras"; };
 
 /** Id determinístico de una asignación (especie + proveedor + mercado). */
-export function asigId(especie: string, proveedor: string, mercado: string) {
+export function asigId(especie: string, proveedor: string, mercado: string, via: Via = "maritimo") {
   let x = 5381;
-  for (const ch of `${especie}|${proveedor}|${mercado}`) x = ((x * 33) ^ (ch.codePointAt(0) || 0)) >>> 0;
+  for (const ch of `${especie}|${proveedor}|${mercado}${via === "aereo" ? "|aereo" : ""}`) x = ((x * 33) ^ (ch.codePointAt(0) || 0)) >>> 0;
   return "x" + x.toString(36);
 }
 

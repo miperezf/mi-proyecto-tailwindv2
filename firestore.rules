@@ -105,22 +105,25 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Semana: id "AAAA-Www" → { semana, pedido: { especie: { mercado: cajas } }, actualizado }
+    // Semana: id "AAAA-Www" → { semana, pedido: { especie: { mercado: pallets } }, aereo: (igual), actualizado }
+    // v59.0: "pedido" es marítimo y "aereo" el pedido aéreo.
     match /artifacts/pedidosfrutam-160cb/public/data/semanas/{semanaId} {
       allow read: if signedIn();
       allow create, update: if signedIn()
         && semanaId.matches('^[0-9]{4}-W[0-9]{2}$')
-        && request.resource.data.keys().hasOnly(['semana', 'pedido', 'actualizado'])
+        && request.resource.data.keys().hasOnly(['semana', 'pedido', 'aereo', 'actualizado'])
         && request.resource.data.semana == semanaId
         && (!('pedido' in request.resource.data) || request.resource.data.pedido is map)
+        && (!('aereo' in request.resource.data) || request.resource.data.aereo is map)
         && (!('actualizado' in request.resource.data) || request.resource.data.actualizado is number);
       allow delete: if signedIn();
 
-      // Asignación: { proveedor, especie, mercado, cajas, creado }
+      // Asignación: { proveedor, especie, mercado, cajas, creado, via? }  (via: 'aereo'; sin via = marítimo)
       match /asignaciones/{asigId} {
         allow read: if signedIn();
         allow create, update: if signedIn()
-          && request.resource.data.keys().hasOnly(['proveedor', 'especie', 'mercado', 'cajas', 'creado'])
+          && request.resource.data.keys().hasOnly(['proveedor', 'especie', 'mercado', 'cajas', 'creado', 'via'])
+          && (!('via' in request.resource.data) || request.resource.data.via == 'aereo')
           && nombreOk(request.resource.data.proveedor)
           && nombreOk(request.resource.data.especie)
           && request.resource.data.mercado is string && request.resource.data.mercado.size() <= 12

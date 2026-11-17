@@ -1,15 +1,16 @@
 // ── Pedidos semanales: almacenamiento en Firestore (v56.0) ───────────────────
 // Rutas (mismo prefijo que los pedidos):
 //   artifacts/{appId}/public/data/config/catalogo                 → Catalogo
-//   artifacts/{appId}/public/data/semanas/{AAAA-Www}              → { semana, pedido, actualizado }
+//   artifacts/{appId}/public/data/semanas/{AAAA-Www}              → { semana, pedido, aereo, actualizado }
+//        (pedido = marítimo, aereo = aéreo; v59.0)
 //   artifacts/{appId}/public/data/semanas/{AAAA-Www}/asignaciones/{id}
-//        → { proveedor, especie, mercado, cajas, creado }
+//        → { proveedor, especie, mercado, cajas, creado, via? }   (via: "aereo"; sin via = marítimo)
 // A diferencia de los pedidos por Mail ID, aquí cada cambio se guarda al momento.
 import {
   type Firestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
   onSnapshot, writeBatch, deleteField, FieldPath,
 } from "firebase/firestore";
-import type { Asig, AsigData, Catalogo, Semana, SemanalStore } from "./datos";
+import { type Asig, type AsigData, type Catalogo, type Semana, type SemanalStore, campoPedido } from "./datos";
 
 export function firestoreStore(db: Firestore, appId: string): SemanalStore {
   const base = `artifacts/${appId}/public/data`;
@@ -27,12 +28,13 @@ export function firestoreStore(db: Firestore, appId: string): SemanalStore {
     }, err),
     subAsig: (s, cb, err) => onSnapshot(asigCol(s), (qs) => cb(qs.docs.map(toAsig)), err),
     setCatalogo: (c) => setDoc(catRef, c),
-    setPedidoCelda: (s, especie, mercado, cajas) =>
-      setDoc(semanaRef(s), { semana: s, pedido: { [especie]: { [mercado]: cajas } }, actualizado: Date.now() }, { merge: true }),
-    setPedido: (s, pedido) => setDoc(semanaRef(s), { semana: s, pedido, actualizado: Date.now() }),
-    borrarEspeciePedido: async (s, especie) => {
+    setPedidoCelda: (s, especie, mercado, cajas, via = "maritimo") =>
+      setDoc(semanaRef(s), { semana: s, [campoPedido(via)]: { [especie]: { [mercado]: cajas } }, actualizado: Date.now() }, { merge: true }),
+    // reemplaza solo el campo de esa vía (la otra queda igual)
+    setPedido: (s, pedido, via = "maritimo") => updateDoc(semanaRef(s), campoPedido(via), pedido, "actualizado", Date.now()),
+    borrarEspeciePedido: async (s, especie, via = "maritimo") => {
       const snap = await getDoc(semanaRef(s));
-      if (snap.exists()) await updateDoc(semanaRef(s), new FieldPath("pedido", especie), deleteField(), "actualizado", Date.now());
+      if (snap.exists()) await updateDoc(semanaRef(s), new FieldPath(campoPedido(via), especie), deleteField(), "actualizado", Date.now());
     },
     tocarSemana: (s) => setDoc(semanaRef(s), { semana: s, actualizado: Date.now() }, { merge: true }),
     borrarSemana: (s) => deleteDoc(semanaRef(s)),
